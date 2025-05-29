@@ -1,13 +1,9 @@
 # main.py
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from ecg_simulator.api import app as ecg_app  # Import your existing app
-import uvicorn
 
-# Create the main FastAPI app
-app = FastAPI()
+app = FastAPI(title="ECG Simulator API", version="1.0.0")
 
-# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -16,34 +12,26 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Mount or include your ECG simulator routes
-# Option 1: If ecg_app is a FastAPI app, mount it
-app.mount("/api", ecg_app)
-
-# Option 2: If you have routers, include them instead
-# from ecg_simulator.api import router
-# app.include_router(router)
-
-# Add a simple root endpoint to test
 @app.get("/")
 def read_root():
-    return {"message": "ECG Simulator API is running"}
+    return {"message": "ECG Simulator API is running", "status": "ok"}
 
-# Local development server
+@app.get("/health")
+def health_check():
+    return {"status": "healthy"}
+
+# Import your ECG routes
+try:
+    from ecg_simulator.api import app as ecg_app
+    # Since your ECG routes already have /api prefix, mount at root
+    app.mount("/api", ecg_app)
+except ImportError as e:
+    print(f"Import error: {e}")
+    # Add a debug endpoint to see what's wrong
+    @app.get("/debug")
+    def debug():
+        return {"error": str(e), "message": "ECG simulator import failed"}
+
 if __name__ == "__main__":
-    uvicorn.run(
-        "main:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=True,
-        reload_excludes=[
-            "*/.git/*",
-            "*/__pycache__/*",
-            "*.pyc",
-            "*/.pytest_cache/*",
-            "*/.vscode/*",
-            "*/.idea/*"
-        ],
-        reload_delay=1,
-        reload_includes=["*.py", "*.html", "*.css", "*.js"]
-    )
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
