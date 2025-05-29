@@ -17,7 +17,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.post("/api/generate_advanced_ecg")
+@app.post("/generate_advanced_ecg")
 async def get_advanced_ecg_data(params: AdvancedECGParams):
 
     time_axis, ecg_signal, rhythm_description = generate_physiologically_accurate_ecg(
