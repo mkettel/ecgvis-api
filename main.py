@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="ECG Simulator API", version="1.0.0")
 
+# CORS middleware to allow cross-origin requests for all origins
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

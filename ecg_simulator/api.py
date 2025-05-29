@@ -8,14 +8,6 @@ from .constants import FS # Import FS from constants
 
 app = FastAPI()
 
-# CORS Configuration
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:3001"], # ADJUST TO YOUR FRONTEND PORT
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 @app.post("/generate_advanced_ecg")
 async def get_advanced_ecg_data(params: AdvancedECGParams):
