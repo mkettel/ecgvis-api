@@ -1,7 +1,7 @@
 # // backend/ecg-simulator/beat_generation.py
 import numpy as np
-from typing import Dict
-from .constants import FS, BASELINE_MV
+from typing import Dict, Tuple, Optional
+from .constants import FS, BASELINE_MV, BEAT_3D_DIRECTIONS
 from .waveform_primitives import gaussian_wave
 
 def generate_single_beat_morphology(params: Dict[str, float], fs: int = FS, draw_only_p: bool = False, is_flutter_wave_itself: bool = False):
@@ -63,3 +63,115 @@ def generate_single_beat_morphology(params: Dict[str, float], fs: int = FS, draw
             beat_waveform += gaussian_wave(t_relative_to_p_onset, t_center, params['t_amplitude'], t_width_std_dev)
 
     return t_relative_to_p_onset, beat_waveform, p_wave_total_offset
+
+
+def generate_single_beat_3d_vectors(
+    params: Dict[str, float], 
+    beat_type: str,
+    fs: int = FS, 
+    draw_only_p: bool = False, 
+    is_flutter_wave_itself: bool = False
+) -> Tuple[np.ndarray, np.ndarray, float]:
+    """
+    Generate 3D cardiac vectors for a single beat.
+    
+    Returns:
+        - t_relative: Time axis relative to beat onset
+        - cardiac_vectors: Array of shape (num_samples, 3) representing [Vx, Vy, Vz] over time
+        - qrs_offset: Time offset from start of array to QRS onset
+    """
+    if is_flutter_wave_itself:
+        wave_duration = params.get('p_duration', 0.10)
+        wave_amplitude = params.get('p_amplitude', -0.2)
+        num_samples = int(wave_duration * fs)
+        if num_samples <= 0: 
+            return np.array([]), np.zeros((0, 3)), 0.0
+            
+        t_relative = np.linspace(0, wave_duration, num_samples, endpoint=False)
+        
+        # Flutter waves are atrial activity, use a generic atrial direction
+        flutter_direction = np.array([0.1, 0.9, 0.2])  # Mostly inferior direction
+        flutter_direction = flutter_direction / np.linalg.norm(flutter_direction)
+        
+        # Create scalar waveform
+        waveform_scalar = np.zeros_like(t_relative)
+        peak_time_ratio = 0.7
+        nadir_idx = int(num_samples * peak_time_ratio)
+        if nadir_idx < num_samples - 1 and nadir_idx > 0:
+            waveform_scalar[:nadir_idx] = np.linspace(0, wave_amplitude, nadir_idx)
+            waveform_scalar[nadir_idx:] = np.linspace(wave_amplitude, wave_amplitude * 0.2, num_samples - nadir_idx)
+        elif num_samples > 0:
+            waveform_scalar[:] = wave_amplitude / 2
+            
+        # Convert to 3D vectors
+        cardiac_vectors = np.outer(waveform_scalar, flutter_direction)
+        return t_relative, cardiac_vectors, 0.0
+
+    # Get 3D direction vectors for this beat type
+    if beat_type not in BEAT_3D_DIRECTIONS:
+        # Fallback to sinus directions if beat type not found
+        beat_directions = BEAT_3D_DIRECTIONS["sinus"]
+    else:
+        beat_directions = BEAT_3D_DIRECTIONS[beat_type]
+    
+    p_direction = beat_directions["P"]
+    qrs_direction = beat_directions["QRS"] 
+    t_direction = beat_directions["T"]
+
+    # Calculate timing parameters
+    p_wave_total_offset = params.get('pr_interval', 0) if params.get('p_amplitude', 0) != 0 else 0
+    p_duration = params.get('p_duration', 0) if params.get('p_amplitude', 0) != 0 else 0
+    qrs_duration = 0.0 if draw_only_p else params.get('qrs_duration', 0.1)
+    st_duration = 0.0 if draw_only_p else params.get('st_duration', 0.1)
+    t_duration = 0.0 if draw_only_p else params.get('t_duration', 0.1)
+    duration_from_p_onset_to_qrs_onset = p_wave_total_offset
+    total_complex_duration = duration_from_p_onset_to_qrs_onset + \
+                             qrs_duration + st_duration + t_duration + 0.05
+    if draw_only_p: 
+        total_complex_duration = p_duration + 0.05 if p_duration > 0 else 0.05
+
+    num_samples = int(total_complex_duration * fs)
+    if num_samples <= 0: 
+        return np.array([]), np.zeros((0, 3)), 0.0
+        
+    t_relative_to_p_onset = np.linspace(0, total_complex_duration, num_samples, endpoint=False)
+    cardiac_vectors = np.zeros((num_samples, 3))
+
+    # Generate P wave vectors
+    if params.get('p_amplitude', 0) != 0 and p_duration > 0:
+        p_center = p_duration / 2
+        p_width_std_dev = p_duration / 4 if p_duration > 0 else 1e-3
+        p_scalar_waveform = gaussian_wave(t_relative_to_p_onset, p_center, params['p_amplitude'], p_width_std_dev)
+        cardiac_vectors += np.outer(p_scalar_waveform, p_direction)
+
+    if not draw_only_p:
+        qrs_onset_in_array_time = p_wave_total_offset
+        
+        # Generate QRS complex vectors
+        if qrs_duration > 0:
+            qrs_scalar_waveform = np.zeros_like(t_relative_to_p_onset)
+            
+            if params.get('q_amplitude', 0) != 0:
+                q_center = qrs_onset_in_array_time + qrs_duration * 0.15
+                q_width_std_dev = qrs_duration / 10 if qrs_duration > 0 else 1e-3
+                qrs_scalar_waveform += gaussian_wave(t_relative_to_p_onset, q_center, params['q_amplitude'], q_width_std_dev)
+            if params.get('r_amplitude', 0) != 0:
+                r_center = qrs_onset_in_array_time + qrs_duration * 0.4
+                r_width_std_dev = qrs_duration / 6 if qrs_duration > 0 else 1e-3
+                qrs_scalar_waveform += gaussian_wave(t_relative_to_p_onset, r_center, params['r_amplitude'], r_width_std_dev)
+            if params.get('s_amplitude', 0) != 0:
+                s_center = qrs_onset_in_array_time + qrs_duration * 0.75
+                s_width_std_dev = qrs_duration / 10 if qrs_duration > 0 else 1e-3
+                qrs_scalar_waveform += gaussian_wave(t_relative_to_p_onset, s_center, params['s_amplitude'], s_width_std_dev)
+            
+            cardiac_vectors += np.outer(qrs_scalar_waveform, qrs_direction)
+
+        # Generate T wave vectors
+        t_onset_in_array_time = qrs_onset_in_array_time + qrs_duration + st_duration
+        if params.get('t_amplitude', 0) != 0 and t_duration > 0:
+            t_center = t_onset_in_array_time + t_duration / 2
+            t_width_std_dev = t_duration / 4 if t_duration > 0 else 1e-3
+            t_scalar_waveform = gaussian_wave(t_relative_to_p_onset, t_center, params['t_amplitude'], t_width_std_dev)
+            cardiac_vectors += np.outer(t_scalar_waveform, t_direction)
+
+    return t_relative_to_p_onset, cardiac_vectors, p_wave_total_offset
