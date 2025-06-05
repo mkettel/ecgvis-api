@@ -6,8 +6,8 @@ MIN_REFRACTORY_PERIOD_SEC = 0.200
 # --- Beat Morphology Definitions ---
 SINUS_PARAMS = {
     "p_duration": 0.09, "pr_interval": 0.16, "qrs_duration": 0.10,
-    "st_duration": 0.12, "t_duration": 0.16, "p_amplitude": 0.15,
-    "q_amplitude": -0.2, "r_amplitude": 1.0, "s_amplitude": -0.25,
+    "st_duration": 0.12, "t_duration": 0.16, "p_amplitude": 0.25,
+    "q_amplitude": -0.2, "r_amplitude": 1.4, "s_amplitude": -0.35,
     "t_amplitude": 0.25,
 }
 PVC_PARAMS = { # Also used as a base for VT beats
@@ -75,13 +75,14 @@ import numpy as np # Make sure numpy is imported
 # Format: [X_component, Y_component, Z_component] based on defined coordinate system
 # (X: R->L, Y: Sup->Inf, Z: Post->Ant)
 
-# For Sinus Rhythm
-SINUS_P_WAVE_DIRECTION = np.array([0.2, 0.8, 0.3])  # Example: Leftward, Inferior, Anterior
-SINUS_QRS_COMPLEX_DIRECTION = np.array([0.4, 0.7, 0.2]) # Example: Leftward, Inferior, Anterior (mean QRS axis)
+# For Sinus Rhythm - Dual-Phase P-wave Implementation
+SINUS_P_WAVE_PHASE1_DIRECTION = np.array([-0.3, 0.5, 0.8])  # Right atrial depolarization: rightward, anterior
+SINUS_P_WAVE_PHASE2_DIRECTION = np.array([0.6, 0.7, 0.2])   # Left atrial depolarization: leftward, posterior
+SINUS_QRS_COMPLEX_DIRECTION = np.array([0.7, 0.6, 0.1]) # Enhanced: More leftward dominance for better V1-V6 progression
 SINUS_T_WAVE_DIRECTION = np.array([0.3, 0.6, 0.15]) # Example: Generally follows QRS
 
 # For PVCs (example, will vary by origin)
-PVC_QRS_COMPLEX_DIRECTION = np.array([-0.6, 0.3, -0.5]) # Example: Rightward, Inferior, Posterior (e.g., LV origin)
+PVC_QRS_COMPLEX_DIRECTION = np.array([-0.8, 0.4, -0.3]) # Enhanced: More rightward for better V1 visibility (LV origin PVC)
 PVC_T_WAVE_DIRECTION = np.array([0.5, -0.2, 0.4])      # Example: Discordant T-wave
 
 # For PACs (P-wave direction will change based on focus)
@@ -92,7 +93,8 @@ def _normalize(v):
     norm = np.linalg.norm(v)
     return v / norm if norm > 0 else v
 
-SINUS_P_WAVE_DIRECTION = _normalize(SINUS_P_WAVE_DIRECTION)
+SINUS_P_WAVE_PHASE1_DIRECTION = _normalize(SINUS_P_WAVE_PHASE1_DIRECTION)
+SINUS_P_WAVE_PHASE2_DIRECTION = _normalize(SINUS_P_WAVE_PHASE2_DIRECTION)
 SINUS_QRS_COMPLEX_DIRECTION = _normalize(SINUS_QRS_COMPLEX_DIRECTION)
 SINUS_T_WAVE_DIRECTION = _normalize(SINUS_T_WAVE_DIRECTION)
 PVC_QRS_COMPLEX_DIRECTION = _normalize(PVC_QRS_COMPLEX_DIRECTION)
@@ -103,12 +105,14 @@ PAC_P_WAVE_DIRECTION_EXAMPLE = _normalize(PAC_P_WAVE_DIRECTION_EXAMPLE)
 # For now, separate constants are fine for starting.
 BEAT_3D_DIRECTIONS = {
     "sinus": {
-        "P": SINUS_P_WAVE_DIRECTION,
+        "P_PHASE1": SINUS_P_WAVE_PHASE1_DIRECTION,  # Right atrial depolarization
+        "P_PHASE2": SINUS_P_WAVE_PHASE2_DIRECTION,  # Left atrial depolarization  
         "QRS": SINUS_QRS_COMPLEX_DIRECTION,
         "T": SINUS_T_WAVE_DIRECTION,
     },
     "pac": { # QRS/T often same as sinus if normally conducted
-        "P": PAC_P_WAVE_DIRECTION_EXAMPLE, # This would ideally change based on PAC origin
+        "P_PHASE1": PAC_P_WAVE_DIRECTION_EXAMPLE, # PACs can have different P-wave morphology
+        "P_PHASE2": PAC_P_WAVE_DIRECTION_EXAMPLE, # For now, use same direction for both phases
         "QRS": SINUS_QRS_COMPLEX_DIRECTION,
         "T": SINUS_T_WAVE_DIRECTION,
     },

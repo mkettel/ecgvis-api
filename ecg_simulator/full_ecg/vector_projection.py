@@ -36,12 +36,12 @@ LEAD_VECTOR_DIRECTIONS: Dict[str, np.ndarray] = {
 
     # Precordial Leads (Transverse Plane primarily) - These are rough estimates
     # TODO: These need significant R&D for accurate Z-axis components and orientations.
-    "V1":  np.array([-0.2, -0.1, 0.9]), # Right sternal border, 4th ICS; points mostly anterior, slightly right & superior
+    "V1":  np.array([-0.5, -0.2, 0.8]), # Right sternal border, 4th ICS; enhanced right & superior components for better septal detection
     "V2":  np.array([0.0, -0.05, 0.95]),# Left sternal border, 4th ICS; points mostly anterior, slightly superior
     "V3":  np.array([0.3, 0.1, 0.8]),  # Midway V2-V4; anterior, slightly left & inferior
     "V4":  np.array([0.6, 0.2, 0.6]),  # Midclavicular line, 5th ICS; anterior-left-inferior
     "V5":  np.array([0.8, 0.1, 0.3]),  # Anterior axillary line, 5th ICS; left-anterior, slightly inferior
-    "V6":  np.array([0.9, 0.0, 0.1]),  # Midaxillary line, 5th ICS; points mostly left, slightly anterior
+    "V6":  np.array([0.9, 0.0, 0.0]),  # Midaxillary line, 5th ICS; points mostly left, slightly anterior
 }
 
 # Normalize all lead vectors
