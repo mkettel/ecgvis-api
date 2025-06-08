@@ -3,7 +3,7 @@ from pydantic import BaseModel, Field
 from typing import Optional
 
 class AdvancedECGParams(BaseModel):
-    heart_rate_bpm: float = Field(75.0, gt=0, description="Base sinus rate if no other dominant rhythm.")
+    heart_rate_bpm: float = Field(60.0, gt=0, description="Base sinus rate if no other dominant rhythm.")
     duration_sec: float = Field(10.0, gt=0)
 
     enable_pvc: bool = Field(False)
