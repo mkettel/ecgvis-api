@@ -45,7 +45,8 @@ async def get_advanced_ecg_data(params: AdvancedECGParams):
         vt_start_time_sec=params.vt_start_time_sec,
         vt_duration_sec=params.vt_duration_sec,
         vt_rate_bpm=params.vt_rate_bpm,
-        fs=FS # Pass the imported FS here
+        fs=FS, # Pass the imported FS here
+        target_qtc_ms=params.target_qtc_ms
     )
     return {"time_axis": time_axis, "ecg_signal": ecg_signal, "rhythm_generated": rhythm_description}
 
@@ -90,7 +91,8 @@ async def get_advanced_ecg_12_lead_data(params: AdvancedECGParams):
         vt_start_time_sec=params.vt_start_time_sec,
         vt_duration_sec=params.vt_duration_sec,
         vt_rate_bpm=params.vt_rate_bpm,
-            fs=FS
+            fs=FS,
+            target_qtc_ms=params.target_qtc_ms
         )
         
         # Convert numpy arrays to lists for JSON serialization

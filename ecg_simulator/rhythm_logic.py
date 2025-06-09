@@ -6,7 +6,7 @@ from typing import List, Dict, Any, Optional
 
 from .constants import (
     BASELINE_MV, MIN_REFRACTORY_PERIOD_SEC, BEAT_MORPHOLOGIES,
-    PVC_COUPLING_FACTOR, PAC_COUPLING_FACTOR
+    PVC_COUPLING_FACTOR, PAC_COUPLING_FACTOR, get_rate_corrected_intervals
 )
 from .beat_generation import generate_single_beat_morphology, generate_single_beat_3d_vectors
 from .full_ecg.vector_projection import project_cardiac_vector_to_12_leads
@@ -44,7 +44,9 @@ def generate_physiologically_accurate_ecg(
     vt_start_time_sec: Optional[float],
     vt_duration_sec: float,
     vt_rate_bpm: int,
-    fs: int
+    fs: int,
+    # QT Correction Parameter
+    target_qtc_ms: float = 400.0
 ):
     base_rr_interval_sec = 60.0 / heart_rate_bpm if heart_rate_bpm > 0 else float('inf')
     num_total_samples = int(duration_sec * fs)
@@ -247,6 +249,21 @@ def generate_physiologically_accurate_ecg(
             else: break
 
         current_beat_morph_params = BEAT_MORPHOLOGIES[current_event.beat_type].copy()
+        
+        # Determine effective heart rate for QT correction based on current rhythm
+        effective_heart_rate = heart_rate_bpm  # Default to sinus rate
+        if is_vt_currently_active:
+            effective_heart_rate = vt_rate_bpm
+        elif is_svt_currently_active:
+            effective_heart_rate = svt_rate_bpm
+        elif enable_atrial_fibrillation and (is_afib_active_base or current_event.beat_type == "afib_conducted"):
+            effective_heart_rate = afib_average_ventricular_rate_bpm
+        elif enable_atrial_flutter and (is_aflutter_active_base or current_event.beat_type == "flutter_conducted_qrs"):
+            # Calculate effective ventricular rate for flutter
+            effective_heart_rate = atrial_flutter_rate_bpm / atrial_flutter_av_block_ratio_qrs_to_f
+        
+        # Apply Bazett's formula for rate-corrected QT intervals
+        current_beat_morph_params = get_rate_corrected_intervals(effective_heart_rate, current_beat_morph_params, target_qtc_ms)
         qrs_is_blocked_by_av_node = False
         draw_p_wave_only_for_this_atrial_event = False
         
@@ -612,7 +629,9 @@ def generate_physiologically_accurate_ecg_12_lead(
     vt_start_time_sec: Optional[float],
     vt_duration_sec: float,
     vt_rate_bpm: int,
-    fs: int # fs is now explicitly passed
+    fs: int, # fs is now explicitly passed
+    # QT Correction Parameter
+    target_qtc_ms: float = 400.0
 ):
     """
     Generates a 12-lead ECG using 3D cardiac vectors with full rhythm logic.
@@ -799,6 +818,21 @@ def generate_physiologically_accurate_ecg_12_lead(
 
         # Get beat parameters and determine AV block
         current_beat_morph_params = BEAT_MORPHOLOGIES[current_event.beat_type].copy()
+        
+        # Determine effective heart rate for QT correction based on current rhythm
+        effective_heart_rate = heart_rate_bpm  # Default to sinus rate
+        if is_vt_currently_active:
+            effective_heart_rate = vt_rate_bpm
+        elif is_svt_currently_active:
+            effective_heart_rate = svt_rate_bpm
+        elif enable_atrial_fibrillation and (is_afib_active_base or current_event.beat_type == "afib_conducted"):
+            effective_heart_rate = afib_average_ventricular_rate_bpm
+        elif enable_atrial_flutter and (is_aflutter_active_base or current_event.beat_type == "flutter_conducted_qrs"):
+            # Calculate effective ventricular rate for flutter
+            effective_heart_rate = atrial_flutter_rate_bpm / atrial_flutter_av_block_ratio_qrs_to_f
+        
+        # Apply Bazett's formula for rate-corrected QT intervals
+        current_beat_morph_params = get_rate_corrected_intervals(effective_heart_rate, current_beat_morph_params)
         qrs_is_blocked_by_av_node = False
         draw_p_wave_only_for_this_atrial_event = False
         

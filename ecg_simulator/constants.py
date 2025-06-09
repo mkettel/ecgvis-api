@@ -3,6 +3,76 @@ FS = 250
 BASELINE_MV = 0.0
 MIN_REFRACTORY_PERIOD_SEC = 0.200
 
+# --- QT Interval Correction Constants ---
+# Normal QTc range: 350-450ms (men), 360-460ms (women)
+NORMAL_QTC_MS = 400.0  # Target corrected QT interval in milliseconds
+NORMAL_RR_INTERVAL_SEC = 1.0  # RR interval at 60 bpm (used as reference)
+
+def calculate_qt_from_heart_rate(heart_rate_bpm: float, target_qtc_ms: float = NORMAL_QTC_MS) -> float:
+    """
+    Calculate QT interval using Bazett's formula: QTc = QT / √(RR)
+    Rearranged to: QT = QTc × √(RR)
+    
+    Args:
+        heart_rate_bpm: Heart rate in beats per minute
+        target_qtc_ms: Target corrected QT interval in milliseconds
+        
+    Returns:
+        QT interval in seconds
+    """
+    if heart_rate_bpm <= 0:
+        return NORMAL_QTC_MS / 1000.0  # Default fallback
+        
+    rr_interval_sec = 60.0 / heart_rate_bpm
+    qt_interval_sec = (target_qtc_ms / 1000.0) * (rr_interval_sec ** 0.5)
+    
+    # Safety bounds: QT should be 20-60% of RR interval
+    min_qt = rr_interval_sec * 0.20
+    max_qt = rr_interval_sec * 0.60
+    
+    return max(min_qt, min(max_qt, qt_interval_sec))
+
+def get_rate_corrected_intervals(heart_rate_bpm: float, base_params: dict, target_qtc_ms: float = NORMAL_QTC_MS) -> dict:
+    """
+    Get rate-corrected interval durations for ECG generation.
+    
+    Args:
+        heart_rate_bpm: Heart rate in beats per minute
+        base_params: Base parameter dictionary (e.g., SINUS_PARAMS)
+        
+    Returns:
+        Dictionary with rate-corrected timing intervals
+    """
+    corrected_params = base_params.copy()
+    
+    # Calculate corrected QT interval using specified target QTc
+    total_qt_sec = calculate_qt_from_heart_rate(heart_rate_bpm, target_qtc_ms)
+    
+    # Distribute QT interval: QRS (25%), ST (30%), T-wave (45%)
+    qrs_duration = corrected_params.get('qrs_duration', 0.10)  # Keep QRS relatively stable
+    
+    # Adjust QRS slightly for rate (wide complex at very high rates)
+    if heart_rate_bpm > 150:
+        qrs_duration *= 1.1  # Slight widening at very high rates
+    elif heart_rate_bpm < 40:
+        qrs_duration *= 0.95  # Slight narrowing at very low rates
+        
+    # Remaining time for ST + T-wave
+    remaining_qt = total_qt_sec - qrs_duration
+    
+    # Distribute remaining time: ST gets ~30%, T-wave gets ~70%
+    st_duration = remaining_qt * 0.30
+    t_duration = remaining_qt * 0.70
+    
+    # Update the corrected parameters
+    corrected_params.update({
+        'qrs_duration': max(0.06, min(0.16, qrs_duration)),  # Bounds: 60-160ms
+        'st_duration': max(0.05, min(0.20, st_duration)),    # Bounds: 50-200ms  
+        't_duration': max(0.08, min(0.30, t_duration)),      # Bounds: 80-300ms
+    })
+    
+    return corrected_params
+
 # --- Beat Morphology Definitions ---
 SINUS_PARAMS = {
     "p_duration": 0.09, "pr_interval": 0.16, "qrs_duration": 0.10,
@@ -82,7 +152,9 @@ SINUS_QRS_COMPLEX_DIRECTION = np.array([0.7, 0.6, 0.1]) # Enhanced: More leftwar
 SINUS_T_WAVE_DIRECTION = np.array([0.3, 0.6, 0.15]) # Example: Generally follows QRS
 
 # For PVCs (example, will vary by origin)
-PVC_QRS_COMPLEX_DIRECTION = np.array([-0.8, 0.4, -0.3]) # Enhanced: More rightward for better V1 visibility (LV origin PVC)
+# PVC_QRS_COMPLEX_DIRECTION = np.array([-0.8, 0.4, -0.3]) # Enhanced: More rightward for better V1 visibility (LV origin PVC)
+# PVC_QRS_COMPLEX_DIRECTION = np.array([0.7, -0.5, -0.5]) # Left (X=0.7), Superior (Y=-0.5), Posterior (Z=-0.5)
+PVC_QRS_COMPLEX_DIRECTION = np.array([0.6, 0.8, -0.3])
 PVC_T_WAVE_DIRECTION = np.array([0.5, -0.2, 0.4])      # Example: Discordant T-wave
 
 # For PACs (P-wave direction will change based on focus)

@@ -6,6 +6,9 @@ class AdvancedECGParams(BaseModel):
     heart_rate_bpm: float = Field(60.0, gt=0, description="Base sinus rate if no other dominant rhythm.")
     duration_sec: float = Field(10.0, gt=0)
 
+    # QT Interval Parameters (Bazett's Formula)
+    target_qtc_ms: float = Field(400.0, ge=300, le=600, description="Target corrected QT interval in milliseconds (QTc). Normal range: 350-450ms (men), 360-460ms (women). Values >500ms may predispose to Torsades de Pointes.")
+
     enable_pvc: bool = Field(False)
     pvc_probability_per_sinus: float = Field(0.0, ge=0, le=1.0)
     enable_pac: bool = Field(False, description="Enable Premature Atrial Contractions.")
