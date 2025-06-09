@@ -1,4 +1,5 @@
 # --- ECG Generation Constants ---
+import numpy as np  # Import numpy at the top
 FS = 250
 BASELINE_MV = 0.0
 MIN_REFRACTORY_PERIOD_SEC = 0.200
@@ -120,6 +121,14 @@ SVT_BEAT_PARAMS.update({
 
 VT_BEAT_PARAMS = PVC_PARAMS.copy() # Monomorphic VT beats often resemble PVCs
 
+# Torsades de Pointes parameters
+TORSADES_BEAT_PARAMS = {
+    "p_duration": 0.0, "p_amplitude": 0.0, "pr_interval": 0.0,
+    "qrs_duration": 0.14, "st_duration": 0.08, "t_duration": 0.18,
+    "q_amplitude": -0.1, "r_amplitude": 1.0, "s_amplitude": -0.3, 
+    "t_amplitude": -0.4, # Often discordant T-wave
+}
+
 BEAT_MORPHOLOGIES = {
     "sinus": SINUS_PARAMS, "pvc": PVC_PARAMS, "pac": PAC_PARAMS,
     "junctional_escape": JUNCTIONAL_ESCAPE_PARAMS,
@@ -129,15 +138,69 @@ BEAT_MORPHOLOGIES = {
     "flutter_conducted_qrs": FLUTTER_CONDUCTED_QRS_PARAMS,
     "svt_beat": SVT_BEAT_PARAMS,
     "vt_beat": VT_BEAT_PARAMS,
+    "torsades_beat": TORSADES_BEAT_PARAMS,
 }
 
 # --- Ectopic Beat Configuration Constants ---
 PVC_COUPLING_FACTOR = 0.60
 PAC_COUPLING_FACTOR = 0.70
 
+# --- Torsades de Pointes Constants ---
+TORSADES_TRIGGER_QTC_MS = 500.0  # QTc threshold for Torsades risk
+TORSADES_SENSITIVE_QTC_MS = 480.0  # QTc threshold for sensitive patients
+TORSADES_MIN_DURATION_SEC = 3.0   # Minimum episode duration
+TORSADES_MAX_DURATION_SEC = 30.0  # Maximum episode duration (usually self-terminates)
+TORSADES_RATE_BPM = 220           # Typical Torsades rate (200-250 bpm)
+TORSADES_AXIS_ROTATION_PERIOD_BEATS = 5  # How many beats per 180° rotation (faster twisting)
+
+def rotate_vector_around_z_axis(vector: np.ndarray, angle_degrees: float) -> np.ndarray:
+    """
+    Rotate a 3D vector around the Z-axis (anterior-posterior axis).
+    This simulates the "twisting" characteristic of Torsades de Pointes.
+    
+    Args:
+        vector: 3D vector [x, y, z]
+        angle_degrees: Rotation angle in degrees
+    
+    Returns:
+        Rotated 3D vector
+    """
+    angle_rad = np.deg2rad(angle_degrees)
+    cos_a = np.cos(angle_rad)
+    sin_a = np.sin(angle_rad)
+    
+    # Rotation matrix around Z-axis
+    rotation_matrix = np.array([
+        [cos_a, -sin_a, 0],
+        [sin_a,  cos_a, 0], 
+        [0,      0,     1]
+    ])
+    
+    return rotation_matrix @ vector
+
+def calculate_torsades_qrs_direction(beat_number: int, base_direction: np.ndarray) -> np.ndarray:
+    """
+    Calculate the QRS direction for a Torsades beat with characteristic axis rotation.
+    
+    Args:
+        beat_number: Sequential beat number in the Torsades episode
+        base_direction: Base QRS direction vector
+        
+    Returns:
+        Rotated QRS direction vector for this beat
+    """
+    # Calculate rotation angle: 180° over TORSADES_AXIS_ROTATION_PERIOD_BEATS
+    rotation_per_beat = 180.0 / TORSADES_AXIS_ROTATION_PERIOD_BEATS
+    current_angle = (beat_number * rotation_per_beat) % 360.0
+    
+    # Add some variability to make it more realistic
+    angle_variation = np.random.normal(0, 25)  # ±25° random variation (increased for more dramatic changes)
+    total_angle = current_angle + angle_variation
+    
+    return rotate_vector_around_z_axis(base_direction, total_angle)
+
 #----------------------------------------------------------------
 # --- 3D Cardiac Vector Directions ------------------------------
-import numpy as np # Make sure numpy is imported
 
 # --- New Constants for 3D Cardiac Vector Directions ---
 # These are VERY rough placeholders for mean electrical axes of P, QRS, T.
@@ -212,6 +275,11 @@ BEAT_3D_DIRECTIONS = {
         "P": np.array([0.0, 0.0, 0.0]),
         "QRS": PVC_QRS_COMPLEX_DIRECTION, # Assuming monomorphic VT, direction depends on origin
         "T": PVC_T_WAVE_DIRECTION,
+    },
+    "torsades_beat": { # Polymorphic VT - direction will be dynamically rotated
+        "P": np.array([0.0, 0.0, 0.0]),
+        "QRS": np.array([-0.9, 0.4, -0.2]),  # More distinct base direction (rightward, posterior)
+        "T": np.array([0.6, -0.8, 0.1]), # Strongly discordant T-wave direction
     },
     # AFib/AFlutter conducted beats would use their respective QRS/T, P directions would be zero.
     # The atrial activity itself for AFib/AFlutter needs a separate 3D model.

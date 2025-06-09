@@ -6,7 +6,9 @@ from typing import List, Dict, Any, Optional
 
 from .constants import (
     BASELINE_MV, MIN_REFRACTORY_PERIOD_SEC, BEAT_MORPHOLOGIES,
-    PVC_COUPLING_FACTOR, PAC_COUPLING_FACTOR, get_rate_corrected_intervals
+    PVC_COUPLING_FACTOR, PAC_COUPLING_FACTOR, get_rate_corrected_intervals,
+    TORSADES_TRIGGER_QTC_MS, TORSADES_SENSITIVE_QTC_MS, TORSADES_MIN_DURATION_SEC,
+    TORSADES_MAX_DURATION_SEC, TORSADES_RATE_BPM, calculate_torsades_qrs_direction
 )
 from .beat_generation import generate_single_beat_morphology, generate_single_beat_3d_vectors
 from .full_ecg.vector_projection import project_cardiac_vector_to_12_leads
@@ -46,7 +48,11 @@ def generate_physiologically_accurate_ecg(
     vt_rate_bpm: int,
     fs: int,
     # QT Correction Parameter
-    target_qtc_ms: float = 400.0
+    target_qtc_ms: float = 400.0,
+    # Torsades de Pointes Parameters
+    enable_torsades_risk: bool = True,
+    torsades_probability_per_beat: float = 0.001,
+    use_sensitive_qtc_threshold: bool = False
 ):
     base_rr_interval_sec = 60.0 / heart_rate_bpm if heart_rate_bpm > 0 else float('inf')
     num_total_samples = int(duration_sec * fs)
@@ -74,6 +80,13 @@ def generate_physiologically_accurate_ecg(
     vt_actual_start_time: Optional[float] = None
     vt_calculated_termination_time: Optional[float] = None 
     vt_actual_end_time: Optional[float] = None
+    
+    # Torsades de Pointes State
+    is_torsades_currently_active: bool = False
+    torsades_actual_start_time: Optional[float] = None
+    torsades_calculated_termination_time: Optional[float] = None
+    torsades_beat_counter: int = 0  # For tracking axis rotation
+    torsades_qtc_threshold = TORSADES_SENSITIVE_QTC_MS if use_sensitive_qtc_threshold else TORSADES_TRIGGER_QTC_MS
     
     # Rhythm hierarchy determination
     is_dynamic_svt_episode_configured = allow_svt_initiation_by_pac
@@ -193,6 +206,31 @@ def generate_physiologically_accurate_ecg(
                 if event_queue and event_queue[0].time < duration_sec: continue
                 else: break
         
+        # Torsades de Pointes termination check
+        if is_torsades_currently_active and torsades_calculated_termination_time is not None and potential_event_time >= torsades_calculated_termination_time:
+            print(f"DEBUG: Torsades Terminating. Potential Event Time: {potential_event_time:.3f}, Torsades Term Time: {torsades_calculated_termination_time:.3f}")
+            is_torsades_currently_active = False
+            torsades_calculated_termination_time = None
+            torsades_beat_counter = 0  # Reset counter
+
+            # Remove remaining Torsades beats from queue
+            event_queue = [e for e in event_queue if not (e.beat_type == "torsades_beat" and e.time >= potential_event_time - 0.001)]
+            heapq.heapify(event_queue)
+            
+            # Schedule resumption of sinus rhythm after Torsades with post-conversion pause
+            if base_rr_interval_sec > 0 and base_rr_interval_sec != float('inf'):
+                physiological_post_torsades_pause = 0.5  # Longer pause after Torsades
+                sa_node_next_fire_time_after_torsades = potential_event_time + physiological_post_torsades_pause
+                
+                if sa_node_next_fire_time_after_torsades < duration_sec:
+                    if not any(e.source == "sa_node" and abs(e.time - sa_node_next_fire_time_after_torsades) < 0.001 for e in event_queue):
+                        heapq.heappush(event_queue, BeatEvent(sa_node_next_fire_time_after_torsades, "sinus", "sa_node"))
+                        print(f"DEBUG: Pushed resumed Sinus beat post-Torsades at {sa_node_next_fire_time_after_torsades:.3f}")
+            
+            if current_event.beat_type == "torsades_beat" and potential_event_time >= torsades_calculated_termination_time - 0.001:
+                if event_queue and event_queue[0].time < duration_sec: continue
+                else: break
+        
         if is_svt_currently_active and svt_termination_time is not None and potential_event_time >= svt_termination_time:
             print(f"DEBUG: SVT Terminating. Potential Event Time: {potential_event_time:.3f}, SVT Term Time: {svt_termination_time:.3f}")
             svt_actual_end_time = svt_termination_time 
@@ -230,8 +268,9 @@ def generate_physiologically_accurate_ecg(
         is_flutter_conducted_qrs_event = current_event.beat_type == "flutter_conducted_qrs"
         is_svt_beat_event_type = current_event.beat_type == "svt_beat"
         is_vt_beat_event_type = current_event.beat_type == "vt_beat"
+        is_torsades_beat_event_type = current_event.beat_type == "torsades_beat"
 
-        if (is_svt_currently_active or is_vt_currently_active) and (is_atrial_origin_event or current_event.source == "sa_node"):
+        if (is_svt_currently_active or is_vt_currently_active or is_torsades_currently_active) and (is_atrial_origin_event or current_event.source == "sa_node"):
             if current_event.source == "sa_node": 
                  sa_node_next_fire_time = max(sa_node_next_fire_time, potential_event_time) + base_rr_interval_sec
             if event_queue and event_queue[0].time < duration_sec : continue 
@@ -264,6 +303,43 @@ def generate_physiologically_accurate_ecg(
         
         # Apply Bazett's formula for rate-corrected QT intervals
         current_beat_morph_params = get_rate_corrected_intervals(effective_heart_rate, current_beat_morph_params, target_qtc_ms)
+        
+        # Torsades de Pointes Risk Assessment and Triggering
+        if (enable_torsades_risk and not is_torsades_currently_active and not is_vt_currently_active and 
+            target_qtc_ms >= torsades_qtc_threshold and current_event.beat_type in ["sinus", "pvc", "pac"]):
+            
+            # Calculate Torsades trigger probability (higher risk with longer QTc)
+            qtc_risk_factor = min((target_qtc_ms - torsades_qtc_threshold) / 100.0, 3.0)  # Max 3x increase
+            adjusted_torsades_probability = torsades_probability_per_beat * (1.0 + qtc_risk_factor)
+            
+            if np.random.random() < adjusted_torsades_probability:
+                print(f"DEBUG: Torsades Triggered! QTc: {target_qtc_ms:.1f}ms, Risk Factor: {qtc_risk_factor:.2f}, Time: {potential_event_time:.3f}")
+                
+                # Initialize Torsades episode
+                is_torsades_currently_active = True
+                torsades_actual_start_time = potential_event_time
+                torsades_beat_counter = 0
+                
+                # Random duration between min and max
+                torsades_duration = np.random.uniform(TORSADES_MIN_DURATION_SEC, TORSADES_MAX_DURATION_SEC)
+                torsades_calculated_termination_time = torsades_actual_start_time + torsades_duration
+                
+                # Clear existing rhythm events during Torsades period
+                event_queue = [e for e in event_queue if e.time < torsades_actual_start_time or e.time >= torsades_calculated_termination_time]
+                
+                # Generate Torsades beats
+                torsades_rr_interval = 60.0 / TORSADES_RATE_BPM
+                torsades_time = torsades_actual_start_time
+                
+                while torsades_time < torsades_calculated_termination_time:
+                    heapq.heappush(event_queue, BeatEvent(torsades_time, "torsades_beat", "torsades"))
+                    # Add some irregularity to RR intervals (±10%)
+                    irregular_rr = torsades_rr_interval * np.random.uniform(0.9, 1.1)
+                    torsades_time += irregular_rr
+                
+                heapq.heapify(event_queue)
+                print(f"DEBUG: Torsades episode scheduled from {torsades_actual_start_time:.3f} to {torsades_calculated_termination_time:.3f}")
+        
         qrs_is_blocked_by_av_node = False
         draw_p_wave_only_for_this_atrial_event = False
         
@@ -300,9 +376,9 @@ def generate_physiologically_accurate_ecg(
             if event_queue and event_queue[0].time < duration_sec : continue 
             else: break
 
-        if not is_svt_currently_active and not is_vt_currently_active and \
+        if not is_svt_currently_active and not is_vt_currently_active and not is_torsades_currently_active and \
            not (is_afib_active_base or is_aflutter_active_base) and \
-           not is_svt_beat_event_type and not is_vt_beat_event_type and \
+           not is_svt_beat_event_type and not is_vt_beat_event_type and not is_torsades_beat_event_type and \
            not is_afib_qrs_event and \
            not is_flutter_conducted_qrs_event and \
            not is_escape_event:
@@ -333,7 +409,7 @@ def generate_physiologically_accurate_ecg(
         
         if not draw_p_wave_only_for_this_atrial_event and \
            not qrs_is_blocked_by_av_node and \
-           not is_escape_event and not is_vt_beat_event_type and \
+           not is_escape_event and not is_vt_beat_event_type and not is_torsades_beat_event_type and \
            potential_event_time < ventricle_ready_for_next_qrs_at_time:
             qrs_is_blocked_by_av_node = True
             if is_atrial_origin_event: draw_p_wave_only_for_this_atrial_event = True 
@@ -386,6 +462,18 @@ def generate_physiologically_accurate_ecg(
                next_vt_event_time < (vt_calculated_termination_time if vt_calculated_termination_time is not None else float('inf')):
                 heapq.heappush(event_queue, BeatEvent(next_vt_event_time, "vt_beat", "vt_focus"))
                 print(f"DEBUG: Pushed VT beat at {next_vt_event_time:.3f}")
+
+        elif is_torsades_beat_event_type and is_torsades_currently_active:
+            torsades_beat_counter += 1  # CRITICAL: Increment the beat counter
+            
+            # Schedule the next Torsades beat with some irregularity
+            torsades_rr_interval_sec = 60.0 / TORSADES_RATE_BPM
+            irregular_rr = torsades_rr_interval_sec * np.random.uniform(0.9, 1.1)
+            next_torsades_time = potential_event_time + irregular_rr
+
+            if (next_torsades_time < duration_sec and 
+                next_torsades_time < (torsades_calculated_termination_time if torsades_calculated_termination_time is not None else float('inf'))):
+                heapq.heappush(event_queue, BeatEvent(next_torsades_time, "torsades_beat", "torsades_focus"))
 
         elif is_svt_beat_event_type and is_svt_currently_active:
             svt_rr_interval_sec = 60.0 / svt_rate_bpm if svt_rate_bpm > 0 else float('inf')
@@ -631,7 +719,11 @@ def generate_physiologically_accurate_ecg_12_lead(
     vt_rate_bpm: int,
     fs: int, # fs is now explicitly passed
     # QT Correction Parameter
-    target_qtc_ms: float = 400.0
+    target_qtc_ms: float = 400.0,
+    # Torsades de Pointes Parameters
+    enable_torsades_risk: bool = True,
+    torsades_probability_per_beat: float = 0.001,
+    use_sensitive_qtc_threshold: bool = False
 ):
     """
     Generates a 12-lead ECG using 3D cardiac vectors with full rhythm logic.
@@ -659,6 +751,13 @@ def generate_physiologically_accurate_ecg_12_lead(
     vt_actual_start_time: Optional[float] = None
     vt_calculated_termination_time: Optional[float] = None 
     vt_actual_end_time: Optional[float] = None
+    
+    # Torsades de Pointes State (copied from single lead)
+    is_torsades_currently_active: bool = False
+    torsades_actual_start_time: Optional[float] = None
+    torsades_calculated_termination_time: Optional[float] = None
+    torsades_beat_counter: int = 0  # For tracking axis rotation
+    torsades_qtc_threshold = TORSADES_SENSITIVE_QTC_MS if use_sensitive_qtc_threshold else TORSADES_TRIGGER_QTC_MS
     
     # Rhythm hierarchy determination (copied from single lead)
     is_dynamic_svt_episode_configured = allow_svt_initiation_by_pac
@@ -764,6 +863,33 @@ def generate_physiologically_accurate_ecg_12_lead(
                 if event_queue and event_queue[0].time < duration_sec: continue
                 else: break
         
+        # Torsades de Pointes Termination
+        if is_torsades_currently_active and torsades_calculated_termination_time is not None and potential_event_time >= torsades_calculated_termination_time:
+            print(f"DEBUG: Torsades Terminating. Potential Event Time: {potential_event_time:.3f}, Torsades Term Time: {torsades_calculated_termination_time:.3f}")
+            is_torsades_currently_active = False
+            torsades_calculated_termination_time = None
+            torsades_beat_counter = 0  # Reset counter
+
+            # Remove remaining Torsades beats from queue
+            event_queue = [e for e in event_queue if not (e.beat_type == "torsades_beat" and e.time >= potential_event_time - 0.001)]
+            heapq.heapify(event_queue)
+            
+            # Schedule resumption of sinus rhythm after Torsades with post-conversion pause
+            if base_rr_interval_sec > 0 and base_rr_interval_sec != float('inf'):
+                time_since_last_sa_p_before_torsades_era = potential_event_time - sa_node_last_actual_fire_time_for_p_wave
+                num_sa_cycles_to_catch_up = math.floor(time_since_last_sa_p_before_torsades_era / base_rr_interval_sec) if base_rr_interval_sec > 0 else 0
+                resumed_sa_fire_time = sa_node_last_actual_fire_time_for_p_wave + (num_sa_cycles_to_catch_up + 1) * base_rr_interval_sec
+                physiological_post_torsades_pause = 0.2  # Longer pause after Torsades
+                sa_node_next_fire_time_after_torsades = max(potential_event_time + physiological_post_torsades_pause, resumed_sa_fire_time)
+                if sa_node_next_fire_time_after_torsades < duration_sec:
+                    if not any(e.source == "sa_node" and abs(e.time - sa_node_next_fire_time_after_torsades) < 0.001 for e in event_queue):
+                        heapq.heappush(event_queue, BeatEvent(sa_node_next_fire_time_after_torsades, "sinus", "sa_node"))
+                        print(f"DEBUG: Pushed resumed Sinus beat post-Torsades at {sa_node_next_fire_time_after_torsades:.3f}")
+            
+            if current_event.beat_type == "torsades_beat" and potential_event_time >= torsades_calculated_termination_time - 0.001:
+                if event_queue and event_queue[0].time < duration_sec: continue
+                else: break
+        
         # SVT Termination
         if is_svt_currently_active and svt_termination_time is not None and potential_event_time >= svt_termination_time:
             svt_actual_end_time = svt_termination_time 
@@ -794,6 +920,7 @@ def generate_physiologically_accurate_ecg_12_lead(
         is_flutter_conducted_qrs_event = current_event.beat_type == "flutter_conducted_qrs"
         is_svt_beat_event_type = current_event.beat_type == "svt_beat"
         is_vt_beat_event_type = current_event.beat_type == "vt_beat"
+        is_torsades_beat_event_type = current_event.beat_type == "torsades_beat"
 
         # Skip suppressed atrial events
         if (is_svt_currently_active or is_vt_currently_active) and is_atrial_origin_event and not current_event.source.startswith("sa_node_resume"):
@@ -832,7 +959,44 @@ def generate_physiologically_accurate_ecg_12_lead(
             effective_heart_rate = atrial_flutter_rate_bpm / atrial_flutter_av_block_ratio_qrs_to_f
         
         # Apply Bazett's formula for rate-corrected QT intervals
-        current_beat_morph_params = get_rate_corrected_intervals(effective_heart_rate, current_beat_morph_params)
+        current_beat_morph_params = get_rate_corrected_intervals(effective_heart_rate, current_beat_morph_params, target_qtc_ms)
+        
+        # Torsades de Pointes Risk Assessment and Triggering
+        if (enable_torsades_risk and not is_torsades_currently_active and not is_vt_currently_active and 
+            target_qtc_ms >= torsades_qtc_threshold and current_event.beat_type in ["sinus", "pvc", "pac"]):
+            
+            # Calculate Torsades trigger probability (higher risk with longer QTc)
+            qtc_risk_factor = min((target_qtc_ms - torsades_qtc_threshold) / 100.0, 3.0)  # Max 3x increase
+            adjusted_torsades_probability = torsades_probability_per_beat * (1.0 + qtc_risk_factor)
+            
+            if np.random.random() < adjusted_torsades_probability:
+                print(f"DEBUG: Torsades Triggered! QTc: {target_qtc_ms:.1f}ms, Risk Factor: {qtc_risk_factor:.2f}, Time: {potential_event_time:.3f}")
+                
+                # Initialize Torsades episode
+                is_torsades_currently_active = True
+                torsades_actual_start_time = potential_event_time
+                torsades_beat_counter = 0
+                
+                # Random duration between min and max
+                torsades_duration = np.random.uniform(TORSADES_MIN_DURATION_SEC, TORSADES_MAX_DURATION_SEC)
+                torsades_calculated_termination_time = torsades_actual_start_time + torsades_duration
+                
+                # Clear existing rhythm events during Torsades period
+                event_queue = [e for e in event_queue if e.time < torsades_actual_start_time or e.time >= torsades_calculated_termination_time]
+                
+                # Generate Torsades beats
+                torsades_rr_interval = 60.0 / TORSADES_RATE_BPM
+                torsades_time = torsades_actual_start_time
+                
+                while torsades_time < torsades_calculated_termination_time:
+                    heapq.heappush(event_queue, BeatEvent(torsades_time, "torsades_beat", "torsades"))
+                    # Add some irregularity to RR intervals (±10%)
+                    irregular_rr = torsades_rr_interval * np.random.uniform(0.9, 1.1)
+                    torsades_time += irregular_rr
+                
+                heapq.heapify(event_queue)
+                print(f"DEBUG: Torsades episode scheduled from {torsades_actual_start_time:.3f} to {torsades_calculated_termination_time:.3f}")
+        
         qrs_is_blocked_by_av_node = False
         draw_p_wave_only_for_this_atrial_event = False
         
@@ -927,7 +1091,12 @@ def generate_physiologically_accurate_ecg_12_lead(
             else: break
 
         # Process Conducted Beat (Full P-QRS-T)
-        _, beat_vectors, qrs_offset_from_shape_start = generate_single_beat_3d_vectors(current_beat_morph_params, current_event.beat_type, fs, draw_only_p=False)
+        # Pass Torsades beat number for axis rotation
+        torsades_beat_num = torsades_beat_counter if is_torsades_beat_event_type else None
+        _, beat_vectors, qrs_offset_from_shape_start = generate_single_beat_3d_vectors(
+            current_beat_morph_params, current_event.beat_type, fs, draw_only_p=False, 
+            torsades_beat_number=torsades_beat_num
+        )
         if len(beat_vectors) > 0:
             waveform_start_time_global = potential_event_time - qrs_offset_from_shape_start
             start_sample_index_global = int(waveform_start_time_global * fs)
@@ -952,6 +1121,18 @@ def generate_physiologically_accurate_ecg_12_lead(
             if vt_rr_interval_sec != float('inf') and next_vt_event_time < duration_sec and \
                next_vt_event_time < (vt_calculated_termination_time if vt_calculated_termination_time is not None else float('inf')):
                 heapq.heappush(event_queue, BeatEvent(next_vt_event_time, "vt_beat", "vt_focus"))
+        elif is_torsades_beat_event_type and is_torsades_currently_active:
+            torsades_beat_counter += 1  # CRITICAL: Increment the beat counter
+            
+            # Schedule the next Torsades beat with some irregularity
+            torsades_rr_interval_sec = 60.0 / TORSADES_RATE_BPM
+            irregular_rr = torsades_rr_interval_sec * np.random.uniform(0.9, 1.1)
+            next_torsades_time = potential_event_time + irregular_rr
+
+            if (next_torsades_time < duration_sec and 
+                next_torsades_time < (torsades_calculated_termination_time if torsades_calculated_termination_time is not None else float('inf'))):
+                heapq.heappush(event_queue, BeatEvent(next_torsades_time, "torsades_beat", "torsades_focus"))
+
         elif is_svt_beat_event_type and is_svt_currently_active:
             svt_rr_interval_sec = 60.0 / svt_rate_bpm if svt_rate_bpm > 0 else float('inf')
             next_svt_event_time = potential_event_time + svt_rr_interval_sec

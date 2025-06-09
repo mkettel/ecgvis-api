@@ -114,7 +114,8 @@ def generate_single_beat_3d_vectors(
     beat_type: str,
     fs: int = FS, 
     draw_only_p: bool = False, 
-    is_flutter_wave_itself: bool = False
+    is_flutter_wave_itself: bool = False,
+    torsades_beat_number: Optional[int] = None
 ) -> Tuple[np.ndarray, np.ndarray, float]:
     """
     Generate 3D cardiac vectors for a single beat.
@@ -170,6 +171,12 @@ def generate_single_beat_3d_vectors(
         p_phase2_direction = None
     
     qrs_direction = beat_directions["QRS"] 
+    
+    # Special handling for Torsades de Pointes - rotate QRS axis
+    if beat_type == "torsades_beat" and torsades_beat_number is not None:
+        from .constants import calculate_torsades_qrs_direction
+        qrs_direction = calculate_torsades_qrs_direction(torsades_beat_number, qrs_direction)
+    
     t_direction = beat_directions["T"]
 
     # Calculate timing parameters

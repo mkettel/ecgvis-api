@@ -46,7 +46,10 @@ async def get_advanced_ecg_data(params: AdvancedECGParams):
         vt_duration_sec=params.vt_duration_sec,
         vt_rate_bpm=params.vt_rate_bpm,
         fs=FS, # Pass the imported FS here
-        target_qtc_ms=params.target_qtc_ms
+        target_qtc_ms=params.target_qtc_ms,
+        enable_torsades_risk=params.enable_torsades_risk,
+        torsades_probability_per_beat=params.torsades_probability_per_beat,
+        use_sensitive_qtc_threshold=params.use_sensitive_qtc_threshold
     )
     return {"time_axis": time_axis, "ecg_signal": ecg_signal, "rhythm_generated": rhythm_description}
 
@@ -92,7 +95,10 @@ async def get_advanced_ecg_12_lead_data(params: AdvancedECGParams):
         vt_duration_sec=params.vt_duration_sec,
         vt_rate_bpm=params.vt_rate_bpm,
             fs=FS,
-            target_qtc_ms=params.target_qtc_ms
+            target_qtc_ms=params.target_qtc_ms,
+            enable_torsades_risk=params.enable_torsades_risk,
+            torsades_probability_per_beat=params.torsades_probability_per_beat,
+            use_sensitive_qtc_threshold=params.use_sensitive_qtc_threshold
         )
         
         # Convert numpy arrays to lists for JSON serialization

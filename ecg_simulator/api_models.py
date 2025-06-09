@@ -8,6 +8,11 @@ class AdvancedECGParams(BaseModel):
 
     # QT Interval Parameters (Bazett's Formula)
     target_qtc_ms: float = Field(400.0, ge=300, le=600, description="Target corrected QT interval in milliseconds (QTc). Normal range: 350-450ms (men), 360-460ms (women). Values >500ms may predispose to Torsades de Pointes.")
+    
+    # Torsades de Pointes Parameters
+    enable_torsades_risk: bool = Field(True, description="Enable Torsades de Pointes risk assessment based on QTc")
+    torsades_probability_per_beat: float = Field(0.001, ge=0.0, le=0.1, description="Base probability per beat of Torsades initiation when QTc > threshold (0.1% default)")
+    use_sensitive_qtc_threshold: bool = Field(False, description="Use 480ms QTc threshold instead of 500ms for sensitive patients")
 
     enable_pvc: bool = Field(False)
     pvc_probability_per_sinus: float = Field(0.0, ge=0, le=1.0)
