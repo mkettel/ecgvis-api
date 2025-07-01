@@ -129,6 +129,30 @@ TORSADES_BEAT_PARAMS = {
     "t_amplitude": -0.4, # Often discordant T-wave
 }
 
+# Bundle Branch Block Parameters
+RBBB_SINUS_PARAMS = SINUS_PARAMS.copy()
+RBBB_SINUS_PARAMS.update({
+    "qrs_duration": 0.12,  # Wide QRS (>120ms)
+    "r_amplitude": 0.8,    # Reduced R wave
+    "s_amplitude": -0.8,   # Deep S wave in lateral leads
+})
+
+LBBB_SINUS_PARAMS = SINUS_PARAMS.copy() 
+LBBB_SINUS_PARAMS.update({
+    "qrs_duration": 0.13,  # Wide QRS (>120ms)
+    "q_amplitude": 0.0,    # Absent Q waves
+    "r_amplitude": 1.6,    # Tall, notched R wave
+    "s_amplitude": -0.1,   # Small or absent S wave
+})
+
+# VFib Parameters  
+VFIB_PARAMS = {
+    "base_amplitude": 0.5,     # Base amplitude for VFib waves
+    "amplitude_variation": 0.8, # How much amplitude varies
+    "frequency_range": (4, 10), # Frequency range in Hz
+    "chaos_factor": 0.9,       # How chaotic the rhythm is
+}
+
 BEAT_MORPHOLOGIES = {
     "sinus": SINUS_PARAMS, "pvc": PVC_PARAMS, "pac": PAC_PARAMS,
     "junctional_escape": JUNCTIONAL_ESCAPE_PARAMS,
@@ -139,6 +163,8 @@ BEAT_MORPHOLOGIES = {
     "svt_beat": SVT_BEAT_PARAMS,
     "vt_beat": VT_BEAT_PARAMS,
     "torsades_beat": TORSADES_BEAT_PARAMS,
+    "rbbb_sinus": RBBB_SINUS_PARAMS,
+    "lbbb_sinus": LBBB_SINUS_PARAMS,
 }
 
 # --- Ectopic Beat Configuration Constants ---
@@ -199,6 +225,38 @@ def calculate_torsades_qrs_direction(beat_number: int, base_direction: np.ndarra
     
     return rotate_vector_around_z_axis(base_direction, total_angle)
 
+def calculate_qrs_vector_from_axis(target_axis_degrees: float) -> np.ndarray:
+    """
+    Calculate a 3D QRS vector that will produce the desired electrical axis.
+    
+    The electrical axis is primarily determined by the frontal plane (X-Y) components.
+    For Lead I (pure X direction): projection = X_component
+    For Lead aVF (pure Y direction): projection = Y_component
+    Axis = arctan2(Y_component, X_component)
+    
+    Args:
+        target_axis_degrees: Desired electrical axis in degrees (-180 to +180)
+        
+    Returns:
+        Normalized 3D QRS vector [X, Y, Z] that produces the target axis
+    """
+    # Convert degrees to radians
+    axis_radians = np.deg2rad(target_axis_degrees)
+    
+    # Calculate X and Y components (frontal plane)
+    # Use unit magnitude in frontal plane, then add small Z component
+    x_component = np.cos(axis_radians)  # Lead I amplitude
+    y_component = np.sin(axis_radians)  # Lead aVF amplitude
+    
+    # Add realistic anterior component for proper precordial progression
+    z_component = 0.6
+    
+    # Create and normalize the vector
+    qrs_vector = np.array([x_component, y_component, z_component])
+    norm = np.linalg.norm(qrs_vector)
+    
+    return qrs_vector / norm if norm > 0 else qrs_vector
+
 #----------------------------------------------------------------
 # --- 3D Cardiac Vector Directions ------------------------------
 
@@ -211,7 +269,7 @@ def calculate_torsades_qrs_direction(beat_number: int, base_direction: np.ndarra
 # For Sinus Rhythm - Dual-Phase P-wave Implementation
 SINUS_P_WAVE_PHASE1_DIRECTION = np.array([-0.3, 0.5, 0.8])  # Right atrial depolarization: rightward, anterior
 SINUS_P_WAVE_PHASE2_DIRECTION = np.array([0.6, 0.7, 0.2])   # Left atrial depolarization: leftward, posterior
-SINUS_QRS_COMPLEX_DIRECTION = np.array([0.7, 0.6, 0.1]) # Enhanced: More leftward dominance for better V1-V6 progression
+SINUS_QRS_COMPLEX_DIRECTION = np.array([0.7, 0.6, 0.35]) # Enhanced: Further increased anterior component for realistic precordial progression
 SINUS_T_WAVE_DIRECTION = np.array([0.3, 0.6, 0.15]) # Example: Generally follows QRS
 
 # For PVCs (example, will vary by origin)

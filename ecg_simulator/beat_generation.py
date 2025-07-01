@@ -115,7 +115,9 @@ def generate_single_beat_3d_vectors(
     fs: int = FS, 
     draw_only_p: bool = False, 
     is_flutter_wave_itself: bool = False,
-    torsades_beat_number: Optional[int] = None
+    torsades_beat_number: Optional[int] = None,
+    enable_axis_override: bool = False,
+    target_axis_degrees: float = 60.0
 ) -> Tuple[np.ndarray, np.ndarray, float]:
     """
     Generate 3D cardiac vectors for a single beat.
@@ -171,6 +173,12 @@ def generate_single_beat_3d_vectors(
         p_phase2_direction = None
     
     qrs_direction = beat_directions["QRS"] 
+    
+    # Override QRS direction if axis override is enabled
+    if enable_axis_override and beat_type in ["sinus", "pac", "afib_conducted", "flutter_conducted_qrs", "svt_beat"]:
+        from .constants import calculate_qrs_vector_from_axis
+        qrs_direction = calculate_qrs_vector_from_axis(target_axis_degrees)
+        print(f"DEBUG: Axis override enabled - Target: {target_axis_degrees}°, QRS vector: {qrs_direction}")
     
     # Special handling for Torsades de Pointes - rotate QRS axis
     if beat_type == "torsades_beat" and torsades_beat_number is not None:

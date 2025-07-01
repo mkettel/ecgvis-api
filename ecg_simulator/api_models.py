@@ -50,3 +50,16 @@ class AdvancedECGParams(BaseModel):
     vt_start_time_sec: Optional[float] = Field(None, ge=0, description="Start time of VT episode (seconds). If None and enable_vt is true, starts near beginning.")
     vt_duration_sec: float = Field(5.0, gt=0, description="Duration of VT episode once initiated (seconds).")
     vt_rate_bpm: int = Field(160, ge=100, le=250, description="Rate of VT when active (bpm).")
+
+    # Bundle Branch Block Parameters
+    enable_rbbb: bool = Field(False, description="Enable Right Bundle Branch Block")
+    enable_lbbb: bool = Field(False, description="Enable Left Bundle Branch Block")
+    
+    # VFib Parameters
+    enable_vfib: bool = Field(False, description="Enable Ventricular Fibrillation")
+    vfib_start_time_sec: Optional[float] = Field(None, ge=0, description="Start time of VFib episode")
+    vfib_duration_sec: float = Field(5.0, gt=0, description="Duration of VFib episode")
+    
+    # Electrical Axis Override (Development/Admin)
+    enable_axis_override: bool = Field(False, description="Enable manual electrical axis override")
+    target_axis_degrees: float = Field(60.0, ge=-180, le=180, description="Target electrical axis in degrees (-180 to +180)")

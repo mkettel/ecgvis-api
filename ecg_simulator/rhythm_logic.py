@@ -11,7 +11,7 @@ from .constants import (
     TORSADES_MAX_DURATION_SEC, TORSADES_RATE_BPM, calculate_torsades_qrs_direction
 )
 from .beat_generation import generate_single_beat_morphology, generate_single_beat_3d_vectors
-from .full_ecg.vector_projection import project_cardiac_vector_to_12_leads
+from .full_ecg.vector_projection import project_cardiac_vector_to_12_leads, calculate_qrs_axis_from_12_lead
 from .waveform_primitives import generate_fibrillatory_waves
 
 # --- Event-Driven Rhythm Generation ---
@@ -46,7 +46,17 @@ def generate_physiologically_accurate_ecg(
     vt_start_time_sec: Optional[float],
     vt_duration_sec: float,
     vt_rate_bpm: int,
-    fs: int,
+    # Bundle Branch Block Parameters
+    enable_rbbb: bool = False,
+    enable_lbbb: bool = False,
+    # VFib Parameters
+    enable_vfib: bool = False,
+    vfib_start_time_sec: Optional[float] = None,
+    vfib_duration_sec: float = 3.0,
+    # Electrical Axis Override
+    enable_axis_override: bool = False,
+    target_axis_degrees: float = 60.0,
+    fs: int = 250,
     # QT Correction Parameter
     target_qtc_ms: float = 400.0,
     # Torsades de Pointes Parameters
@@ -717,7 +727,17 @@ def generate_physiologically_accurate_ecg_12_lead(
     vt_start_time_sec: Optional[float],
     vt_duration_sec: float,
     vt_rate_bpm: int,
-    fs: int, # fs is now explicitly passed
+    # Bundle Branch Block Parameters
+    enable_rbbb: bool = False,
+    enable_lbbb: bool = False,
+    # VFib Parameters
+    enable_vfib: bool = False,
+    vfib_start_time_sec: Optional[float] = None,
+    vfib_duration_sec: float = 3.0,
+    # Electrical Axis Override
+    enable_axis_override: bool = False,
+    target_axis_degrees: float = 60.0,
+    fs: int = 250, # fs is now explicitly passed
     # QT Correction Parameter
     target_qtc_ms: float = 400.0,
     # Torsades de Pointes Parameters
@@ -1005,7 +1025,7 @@ def generate_physiologically_accurate_ecg_12_lead(
             flutter_wave_params_local = BEAT_MORPHOLOGIES["flutter_wave"].copy()
             flutter_wave_params_local["p_amplitude"] = atrial_flutter_wave_amplitude_mv
             flutter_wave_params_local["p_duration"] = flutter_wave_rr_interval_sec
-            _, flutter_vectors, _ = generate_single_beat_3d_vectors(flutter_wave_params_local, "flutter_wave", fs, is_flutter_wave_itself=True)
+            _, flutter_vectors, _ = generate_single_beat_3d_vectors(flutter_wave_params_local, "flutter_wave", fs, is_flutter_wave_itself=True, enable_axis_override=False)
             if len(flutter_vectors) > 0:
                 fw_start_time_global = potential_event_time
                 fw_start_sample_idx = int(fw_start_time_global * fs)
@@ -1069,7 +1089,7 @@ def generate_physiologically_accurate_ecg_12_lead(
         # Process Blocked Atrial Event (Draw P only)
         if qrs_is_blocked_by_av_node:
             if draw_p_wave_only_for_this_atrial_event:
-                _, p_vectors, p_wave_offset_for_drawing = generate_single_beat_3d_vectors(current_beat_morph_params, current_event.beat_type, fs, draw_only_p=True)
+                _, p_vectors, p_wave_offset_for_drawing = generate_single_beat_3d_vectors(current_beat_morph_params, current_event.beat_type, fs, draw_only_p=True, enable_axis_override=False)
                 if len(p_vectors) > 0:
                     p_wave_start_time_global = potential_event_time - p_wave_offset_for_drawing
                     p_start_sample_idx_global = int(p_wave_start_time_global * fs)
@@ -1095,7 +1115,9 @@ def generate_physiologically_accurate_ecg_12_lead(
         torsades_beat_num = torsades_beat_counter if is_torsades_beat_event_type else None
         _, beat_vectors, qrs_offset_from_shape_start = generate_single_beat_3d_vectors(
             current_beat_morph_params, current_event.beat_type, fs, draw_only_p=False, 
-            torsades_beat_number=torsades_beat_num
+            torsades_beat_number=torsades_beat_num,
+            enable_axis_override=enable_axis_override,
+            target_axis_degrees=target_axis_degrees
         )
         if len(beat_vectors) > 0:
             waveform_start_time_global = potential_event_time - qrs_offset_from_shape_start
@@ -1374,5 +1396,17 @@ def generate_physiologically_accurate_ecg_12_lead(
     final_description = final_description.replace(" with and ", " with ").replace(" and and ", " and ")
     if not final_description: 
         final_description = "12-Lead ECG Simulation"
+
+    # Calculate electrical axis
+    try:
+        axis_degrees, axis_interpretation = calculate_qrs_axis_from_12_lead(twelve_lead_signals)
+        print(f"DEBUG: Lead I amplitude: {np.max(np.abs(twelve_lead_signals['I'])):.3f}")
+        print(f"DEBUG: Lead aVF amplitude: {np.max(np.abs(twelve_lead_signals['aVF'])):.3f}")
+        print(f"DEBUG: Calculated axis: {axis_degrees:.1f}° ({axis_interpretation})")
+        final_description += f" | Axis: {axis_degrees:.0f}° ({axis_interpretation})"
+    except Exception as e:
+        print(f"Warning: Could not calculate electrical axis: {e}")
+        import traceback
+        traceback.print_exc()
 
     return full_time_axis_np.tolist(), twelve_lead_signals, final_description
