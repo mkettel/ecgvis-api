@@ -4,12 +4,18 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="ECG Simulator API", version="1.0.0")
 
-# CORS middleware to allow cross-origin requests for all origins
+# CORS middleware - restrict to production domains for security
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "https://opti-ecg.com",
+        "https://www.opti-ecg.com",
+        "https://optical-ekg-chi.vercel.app",
+        "http://localhost:3000",  # For local development
+        "http://127.0.0.1:3000"   # For local development
+    ],
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
 
