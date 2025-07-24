@@ -2,7 +2,7 @@
 import numpy as np
 from typing import Dict, Tuple, Optional
 from .constants import FS, BASELINE_MV, BEAT_3D_DIRECTIONS
-from .waveform_primitives import gaussian_wave
+from .waveform_primitives import gaussian_wave, fourier_p_wave
 
 def generate_biphasic_p_wave_vectors(
     t_axis: np.ndarray,
@@ -14,6 +14,7 @@ def generate_biphasic_p_wave_vectors(
 ) -> np.ndarray:
     """
     Generate dual-phase P-wave vectors representing right and left atrial depolarization.
+    Creates smooth, blended RA/LA components that merge physiologically without visible separation.
     
     Args:
         t_axis: Time axis for the beat
@@ -28,23 +29,75 @@ def generate_biphasic_p_wave_vectors(
     """
     cardiac_vectors = np.zeros((len(t_axis), 3))
     
-    # Phase 1: Right atrial depolarization (first 45% of P-wave)
-    phase1_duration = p_duration * 0.45
-    phase1_center = p_center - p_duration * 0.15  # Slightly earlier than center
-    phase1_std = phase1_duration / 3  # Narrower than total P-wave
-    phase1_amplitude = p_amplitude * 0.8  # Slightly smaller than total amplitude
+    # Create overlapping phases with minimal temporal separation for smooth blending
+    # Phase 1: Right atrial depolarization (starts early, overlaps with LA)
+    phase1_duration = p_duration * 0.7  # Longer duration for smooth overlap
+    phase1_center = p_center - p_duration * 0.08  # Minimal offset from center
+    phase1_amplitude = p_amplitude * 0.6  # Reduced to prevent over-amplitude when combined
     
-    phase1_scalar = gaussian_wave(t_axis, phase1_center, phase1_amplitude, phase1_std)
+    phase1_scalar = fourier_p_wave(t_axis, phase1_center, phase1_amplitude, phase1_duration)
+    
+    # Phase 2: Left atrial depolarization (starts slightly later, larger contribution)
+    phase2_duration = p_duration * 0.8  # Longer duration for smooth overlap  
+    phase2_center = p_center + p_duration * 0.05  # Minimal offset for subtle timing difference
+    phase2_amplitude = p_amplitude * 0.7  # LA is typically dominant but not overwhelming
+    
+    phase2_scalar = fourier_p_wave(t_axis, phase2_center, phase2_amplitude, phase2_duration)
+    
+    # Combine the phases with vector addition
     cardiac_vectors += np.outer(phase1_scalar, phase1_direction)
-    
-    # Phase 2: Left atrial depolarization (last 55% of P-wave) 
-    phase2_duration = p_duration * 0.55
-    phase2_center = p_center + p_duration * 0.1   # Slightly later than center
-    phase2_std = phase2_duration / 3
-    phase2_amplitude = p_amplitude * 0.9  # Slightly larger (LA is dominant)
-    
-    phase2_scalar = gaussian_wave(t_axis, phase2_center, phase2_amplitude, phase2_std)
     cardiac_vectors += np.outer(phase2_scalar, phase2_direction)
+    
+    # Calculate and log cumulative atrial vector axis for debugging
+    # Find the peak of combined P-wave activity
+    total_magnitude = np.linalg.norm(cardiac_vectors, axis=1)
+    peak_idx = np.argmax(total_magnitude)
+    if peak_idx < len(cardiac_vectors):
+        peak_vector = cardiac_vectors[peak_idx]
+        
+        # Calculate axis in frontal plane (x-y plane) - degrees from positive x-axis
+        frontal_axis_radians = np.arctan2(peak_vector[1], peak_vector[0])
+        frontal_axis_degrees = np.degrees(frontal_axis_radians)
+        
+        # Normalize to 0-360 degrees
+        if frontal_axis_degrees < 0:
+            frontal_axis_degrees += 360
+            
+        # Also calculate magnitude for reference
+        peak_magnitude = np.linalg.norm(peak_vector)
+        
+        print(f"P-wave Vector Analysis:")
+        print(f"  RA Phase1 vector: [{phase1_direction[0]:.3f}, {phase1_direction[1]:.3f}, {phase1_direction[2]:.3f}]")
+        print(f"  LA Phase2 vector: [{phase2_direction[0]:.3f}, {phase2_direction[1]:.3f}, {phase2_direction[2]:.3f}]")
+        print(f"  Combined peak vector: [{peak_vector[0]:.3f}, {peak_vector[1]:.3f}, {peak_vector[2]:.3f}]")
+        print(f"  Frontal plane P-wave axis: {frontal_axis_degrees:.1f}° (normal: +15° to +75°)")
+        print(f"  Peak vector magnitude: {peak_magnitude:.3f}")
+        
+        # Clinical interpretation
+        if 15 <= frontal_axis_degrees <= 75:
+            print(f"  Interpretation: Normal P-wave axis")
+        elif frontal_axis_degrees < 15:
+            print(f"  Interpretation: Right atrial enlargement pattern")  
+        elif frontal_axis_degrees > 75:
+            print(f"  Interpretation: Left atrial enlargement pattern")
+    
+    # Apply smoothing to the combined result to eliminate any residual jagedness
+    # Smooth each vector component separately
+    for i in range(3):  # x, y, z components
+        vector_component = cardiac_vectors[:, i]
+        # Find non-zero region to apply smoothing
+        non_zero_mask = np.abs(vector_component) > 0.01 * np.max(np.abs(vector_component))
+        if np.any(non_zero_mask):
+            # Apply gentle 5-point smoothing to eliminate sharp transitions
+            smoothed_component = np.copy(vector_component)
+            for j in range(2, len(vector_component) - 2):
+                if non_zero_mask[j]:
+                    smoothed_component[j] = (0.1 * vector_component[j-2] + 
+                                           0.2 * vector_component[j-1] + 
+                                           0.4 * vector_component[j] + 
+                                           0.2 * vector_component[j+1] + 
+                                           0.1 * vector_component[j+2])
+            cardiac_vectors[:, i] = smoothed_component
     
     return cardiac_vectors
 
@@ -81,8 +134,8 @@ def generate_single_beat_morphology(params: Dict[str, float], fs: int = FS, draw
 
     if params.get('p_amplitude', 0) != 0 and p_duration > 0:
         p_center = p_duration / 2
-        p_width_std_dev = p_duration / 4 if p_duration > 0 else 1e-3
-        beat_waveform += gaussian_wave(t_relative_to_p_onset, p_center, params['p_amplitude'], p_width_std_dev)
+        # Use Fourier-based P-wave for more physiological morphology
+        beat_waveform += fourier_p_wave(t_relative_to_p_onset, p_center, params['p_amplitude'], p_duration)
 
     if not draw_only_p:
         qrs_onset_in_array_time = p_wave_total_offset
@@ -222,9 +275,8 @@ def generate_single_beat_3d_vectors(
             )
             cardiac_vectors += p_wave_vectors
         else:
-            # Fallback to single-phase P-wave generation
-            p_width_std_dev = p_duration / 4 if p_duration > 0 else 1e-3
-            p_scalar_waveform = gaussian_wave(t_relative_to_p_onset, p_center, params['p_amplitude'], p_width_std_dev)
+            # Use Fourier-based P-wave for single-phase generation
+            p_scalar_waveform = fourier_p_wave(t_relative_to_p_onset, p_center, params['p_amplitude'], p_duration)
             cardiac_vectors += np.outer(p_scalar_waveform, p_direction)
 
     if not draw_only_p:

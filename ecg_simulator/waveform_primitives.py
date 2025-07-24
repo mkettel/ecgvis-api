@@ -7,6 +7,90 @@ def gaussian_wave(t_points, center, amplitude, width_std_dev):
     if width_std_dev <= 1e-9: return np.zeros_like(t_points)
     return amplitude * np.exp(-((t_points - center)**2) / (2 * width_std_dev**2))
 
+def fourier_p_wave(t_points, center, amplitude, duration):
+    """
+    Generate physiologically accurate uniphasic P-wave using modified Fourier approach.
+    
+    This generates a smooth, rounded P-wave with realistic morphology. Creates a
+    single-phase atrial depolarization waveform. Biphasic P-waves in certain leads
+    result from vector addition of separate RA/LA components.
+    
+    P-waves are characterized by:
+    - Smooth, rounded morphology (not sharp peaks)
+    - Gradual onset and offset 
+    - Slight asymmetry (faster upstroke than downstroke)
+    - Duration typically 80-120ms
+    
+    Args:
+        t_points: Time points array
+        center: Center time of P-wave
+        amplitude: Peak amplitude (can be positive or negative)
+        duration: Total P-wave duration (~80-120ms typically)
+    
+    Returns:
+        Uniphasic P-wave signal with smooth, physiological morphology
+    """
+    if duration <= 1e-9:
+        return np.zeros_like(t_points)
+    
+    # Create time relative to P-wave center, normalized by duration
+    t_relative = (t_points - center) / duration
+    
+    # Define the P-wave window - use wider window for smoother morphology
+    mask = np.abs(t_relative) <= 0.6  # Slightly wider than 0.5 for smoother edges
+    p_wave = np.zeros_like(t_points)
+    
+    if not np.any(mask):
+        return p_wave
+    
+    t_masked = t_relative[mask]
+    
+    # Primary envelope: smooth Hann window for overall P-wave shape
+    primary_envelope = 0.5 * (1 + np.cos(np.pi * t_masked / 0.6))  # Adjusted for wider window
+    
+    # Create asymmetric base waveform using low-frequency Fourier components
+    # Use very low frequency for smooth, broad morphology
+    base_freq = 0.8  # Lower frequency for smoother, wider P-wave
+    
+    # Main component: smooth sinusoidal base
+    main_component = np.sin(2 * np.pi * base_freq * t_masked + np.pi/2)
+    
+    # Add slight asymmetry with very small 2nd harmonic
+    # This creates the characteristic faster upstroke, slower downstroke
+    asymmetry_component = 0.12 * np.sin(2 * np.pi * 2 * base_freq * t_masked + np.pi/4)
+    
+    # Combine base components
+    base_waveform = main_component + asymmetry_component
+    
+    # Apply additional smoothing envelope for realistic rounded appearance
+    # Use raised cosine squared for extra smoothness
+    smoothing_envelope = (0.5 * (1 + np.cos(np.pi * t_masked / 0.6))) ** 1.5
+    
+    # Create final P-wave signal
+    p_wave_signal = smoothing_envelope * base_waveform
+    
+    # Ensure uniphasic nature - shift to be purely positive
+    p_wave_signal = np.maximum(p_wave_signal, 0)
+    
+    # Apply final smoothing to eliminate any sharp edges
+    # Simple 3-point moving average for additional smoothing
+    if len(p_wave_signal) > 2:
+        smoothed_signal = np.copy(p_wave_signal)
+        for i in range(1, len(p_wave_signal) - 1):
+            smoothed_signal[i] = 0.25 * p_wave_signal[i-1] + 0.5 * p_wave_signal[i] + 0.25 * p_wave_signal[i+1]
+        p_wave_signal = smoothed_signal
+    
+    # Normalize to ensure peak amplitude matches target
+    signal_peak = np.max(p_wave_signal)
+    if signal_peak > 0:
+        normalization_factor = 1.0 / signal_peak
+        p_wave_signal *= normalization_factor
+    
+    # Apply amplitude scaling (amplitude can be negative for opposite polarity)
+    p_wave[mask] = amplitude * p_wave_signal
+    
+    return p_wave
+
 # --- Fibrillatory Wave Generation for AFib ---
 def generate_fibrillatory_waves(duration_sec: float, amplitude_mv: float, fs: int = FS):
     num_samples = int(duration_sec * fs)
