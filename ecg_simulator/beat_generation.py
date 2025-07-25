@@ -228,7 +228,7 @@ def generate_single_beat_3d_vectors(
     qrs_direction = beat_directions["QRS"] 
     
     # Override QRS direction if axis override is enabled
-    if enable_axis_override and beat_type in ["sinus", "pac", "afib_conducted", "flutter_conducted_qrs", "svt_beat"]:
+    if enable_axis_override and beat_type in ["sinus", "pac", "pac_high_ra", "pac_low_atrial", "pac_left_atrial", "afib_conducted", "flutter_conducted_qrs", "svt_beat"]:
         from .constants import calculate_qrs_vector_from_axis
         qrs_direction = calculate_qrs_vector_from_axis(target_axis_degrees)
         print(f"DEBUG: Axis override enabled - Target: {target_axis_degrees}°, QRS vector: {qrs_direction}")

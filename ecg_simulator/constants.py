@@ -155,6 +155,10 @@ VFIB_PARAMS = {
 
 BEAT_MORPHOLOGIES = {
     "sinus": SINUS_PARAMS, "pvc": PVC_PARAMS, "pac": PAC_PARAMS,
+    # Different PAC types - same morphology parameters, different vector directions
+    "pac_high_ra": PAC_PARAMS,
+    "pac_low_atrial": PAC_PARAMS,
+    "pac_left_atrial": PAC_PARAMS,
     "junctional_escape": JUNCTIONAL_ESCAPE_PARAMS,
     "ventricular_escape": VENTRICULAR_ESCAPE_PARAMS,
     "afib_conducted": AFIB_CONDUCTED_QRS_PARAMS,
@@ -278,8 +282,19 @@ SINUS_T_WAVE_DIRECTION = np.array([0.3, 0.6, 0.15]) # Example: Generally follows
 PVC_QRS_COMPLEX_DIRECTION = np.array([0.6, 0.8, -0.3])
 PVC_T_WAVE_DIRECTION = np.array([0.5, -0.2, 0.4])      # Example: Discordant T-wave
 
-# For PACs (P-wave direction will change based on focus)
-PAC_P_WAVE_DIRECTION_EXAMPLE = np.array([0.1, 0.5, 0.6]) # Example: Low atrial PAC - more superior P vector
+# For PACs - Different vectors based on ectopic focus location
+# High Right Atrial PAC (near SVC junction)
+HIGH_RA_PAC_PHASE1 = np.array([-0.5, 0.2, 0.9])  # More rightward and anterior than sinus
+HIGH_RA_PAC_PHASE2 = np.array([0.3, 0.4, 0.8])   # LA component less dominant
+
+# Low Atrial PAC (near coronary sinus/AV junction) 
+# Spreads UPWARD from low atrium - creates inverted P-waves in inferior leads
+LOW_ATRIAL_PAC_PHASE1 = np.array([0.1, -0.7, 0.2])  # Superior vector (negative Y = upward)
+LOW_ATRIAL_PAC_PHASE2 = np.array([0.2, -0.8, 0.1])  # Both phases spread upward from ectopic focus
+
+# Left Atrial PAC (from left atrial appendage or pulmonary veins)
+LEFT_ATRIAL_PAC_PHASE1 = np.array([0.7, 0.5, 0.1])  # RA fires normally first
+LEFT_ATRIAL_PAC_PHASE2 = np.array([0.9, 0.3, -0.2]) # Strong leftward, posterior LA focus
 
 # Normalize these direction vectors (do this once, e.g., on module load or here)
 def _normalize(v):
@@ -292,7 +307,14 @@ SINUS_QRS_COMPLEX_DIRECTION = _normalize(SINUS_QRS_COMPLEX_DIRECTION)
 SINUS_T_WAVE_DIRECTION = _normalize(SINUS_T_WAVE_DIRECTION)
 PVC_QRS_COMPLEX_DIRECTION = _normalize(PVC_QRS_COMPLEX_DIRECTION)
 PVC_T_WAVE_DIRECTION = _normalize(PVC_T_WAVE_DIRECTION)
-PAC_P_WAVE_DIRECTION_EXAMPLE = _normalize(PAC_P_WAVE_DIRECTION_EXAMPLE)
+
+# Normalize PAC vectors
+HIGH_RA_PAC_PHASE1 = _normalize(HIGH_RA_PAC_PHASE1)
+HIGH_RA_PAC_PHASE2 = _normalize(HIGH_RA_PAC_PHASE2)
+LOW_ATRIAL_PAC_PHASE1 = _normalize(LOW_ATRIAL_PAC_PHASE1)
+LOW_ATRIAL_PAC_PHASE2 = _normalize(LOW_ATRIAL_PAC_PHASE2)
+LEFT_ATRIAL_PAC_PHASE1 = _normalize(LEFT_ATRIAL_PAC_PHASE1)
+LEFT_ATRIAL_PAC_PHASE2 = _normalize(LEFT_ATRIAL_PAC_PHASE2)
 
 # You might want a more structured way to store these, e.g., in BEAT_MORPHOLOGIES
 # For now, separate constants are fine for starting.
@@ -303,9 +325,29 @@ BEAT_3D_DIRECTIONS = {
         "QRS": SINUS_QRS_COMPLEX_DIRECTION,
         "T": SINUS_T_WAVE_DIRECTION,
     },
-    "pac": { # QRS/T often same as sinus if normally conducted
-        "P_PHASE1": PAC_P_WAVE_DIRECTION_EXAMPLE, # PACs can have different P-wave morphology
-        "P_PHASE2": PAC_P_WAVE_DIRECTION_EXAMPLE, # For now, use same direction for both phases
+    # PACs - Different types based on ectopic focus location
+    "pac_high_ra": {  # High Right Atrial PAC (near SVC)
+        "P_PHASE1": HIGH_RA_PAC_PHASE1, 
+        "P_PHASE2": HIGH_RA_PAC_PHASE2, 
+        "QRS": SINUS_QRS_COMPLEX_DIRECTION,  # Normally conducted
+        "T": SINUS_T_WAVE_DIRECTION,
+    },
+    "pac_low_atrial": {  # Low Atrial PAC (near AV junction)
+        "P_PHASE1": LOW_ATRIAL_PAC_PHASE1,
+        "P_PHASE2": LOW_ATRIAL_PAC_PHASE2, 
+        "QRS": SINUS_QRS_COMPLEX_DIRECTION,  # Normally conducted
+        "T": SINUS_T_WAVE_DIRECTION,
+    },
+    "pac_left_atrial": {  # Left Atrial PAC (LA appendage/PV)
+        "P_PHASE1": LEFT_ATRIAL_PAC_PHASE1,
+        "P_PHASE2": LEFT_ATRIAL_PAC_PHASE2,
+        "QRS": SINUS_QRS_COMPLEX_DIRECTION,  # Normally conducted  
+        "T": SINUS_T_WAVE_DIRECTION,
+    },
+    # Legacy PAC (for backward compatibility)
+    "pac": {  # Default to high RA PAC
+        "P_PHASE1": HIGH_RA_PAC_PHASE1, 
+        "P_PHASE2": HIGH_RA_PAC_PHASE2, 
         "QRS": SINUS_QRS_COMPLEX_DIRECTION,
         "T": SINUS_T_WAVE_DIRECTION,
     },

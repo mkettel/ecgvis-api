@@ -538,7 +538,12 @@ def generate_physiologically_accurate_ecg(
                 if not is_vt_currently_active and not is_svt_currently_active:
                     pac_time = potential_event_time + (coupling_rr_basis * PAC_COUPLING_FACTOR)
                     if pac_time > potential_event_time + 0.100 and pac_time < sa_node_next_fire_time - 0.100: 
-                        heapq.heappush(event_queue, BeatEvent(pac_time, "pac", "pac_focus"))
+                        # Randomly select PAC type based on clinical prevalence
+                        pac_types = ["pac_high_ra", "pac_low_atrial", "pac_left_atrial"]
+                        pac_weights = [0.4, 0.3, 0.3]  # High RA most common, then low atrial, then left atrial
+                        selected_pac_type = np.random.choice(pac_types, p=pac_weights)
+                        print(f"DEBUG: Generated {selected_pac_type} at {pac_time:.3f}s (coupling factor: {PAC_COUPLING_FACTOR})")
+                        heapq.heappush(event_queue, BeatEvent(pac_time, selected_pac_type, "pac_focus"))
             if enable_pvc and np.random.rand() < pvc_probability_per_sinus:
                 if not is_vt_currently_active and not is_svt_currently_active:
                     pvc_time = potential_event_time + (coupling_rr_basis * PVC_COUPLING_FACTOR)
@@ -547,38 +552,62 @@ def generate_physiologically_accurate_ecg(
                     if pvc_time > potential_event_time + (qrs_duration_this_beat or 0) + 0.020 and pvc_time < next_potential_sa_qrs - 0.100:
                         heapq.heappush(event_queue, BeatEvent(pvc_time, "pvc", "pvc_focus"))
 
-        elif current_event.beat_type == "pac": 
-            sa_node_next_fire_time = potential_event_time + base_rr_interval_sec 
-            new_event_queue = [e for e in event_queue if not (e.source == "sa_node")] 
-            heapq.heapify(new_event_queue); event_queue = new_event_queue
-            if base_rr_interval_sec != float('inf') and sa_node_next_fire_time < duration_sec:
-                 if not is_svt_currently_active and not is_vt_currently_active: 
-                    heapq.heappush(event_queue, BeatEvent(sa_node_next_fire_time, "sinus", "sa_node"))
-
+        elif current_event.beat_type.startswith("pac"): 
+            # Check if PAC will initiate SVT first (before SA node reset)
+            svt_will_be_initiated = False
             if is_dynamic_svt_episode_configured and not is_svt_currently_active and not is_vt_currently_active and \
                not is_afib_active_base and not is_aflutter_active_base and not is_third_degree_block_active_base:
                 if np.random.rand() < svt_initiation_probability_after_pac:
-                    is_svt_currently_active = True
-                    svt_actual_start_time = potential_event_time 
-                    svt_termination_time = svt_actual_start_time + svt_duration_sec
-                    physio_pause = 0.1
-                    resume_time  = svt_actual_start_time + svt_duration_sec + physio_pause
-                    if resume_time < duration_sec:
-                        heapq.heappush(
-                          event_queue,
-                          BeatEvent(resume_time, "sinus", "sa_node")
-                        )
-                    print(f"DEBUG: SVT Initiated by PAC. PAC time: {potential_event_time:.3f}, SVT Start: {svt_actual_start_time:.3f}, SVT Term Time: {svt_termination_time:.3f}")
-                    print(f"DEBUG: SA P Wave Time at SVT init: {sa_node_last_actual_fire_time_for_p_wave:.3f}")
+                    svt_will_be_initiated = True
+            
+            # PAC resets SA node cycle via retrograde conduction - creates NON-compensatory pause
+            # UNLESS the PAC initiates SVT, in which case SVT takes over
+            if not is_svt_currently_active and not is_vt_currently_active and not svt_will_be_initiated:
+                if base_rr_interval_sec > 0 and base_rr_interval_sec != float('inf'):
+                    # PAC resets SA node at PAC time, then SA fires after normal RR interval
+                    # BUT: slight delay due to retrograde conduction time and SA node recovery
+                    retrograde_conduction_delay = 0.05  # ~50ms for retrograde conduction to SA node
+                    sa_node_reset_recovery_time = 0.03   # ~30ms for SA node to recover after reset
                     
-                    event_queue = [e for e in event_queue if not (e.source == "sa_node" and e.time >= svt_actual_start_time and e.time < svt_termination_time)]
-                    heapq.heapify(event_queue)
+                    # SA node reset time = PAC time + retrograde delay
+                    sa_node_reset_time = potential_event_time + retrograde_conduction_delay
+                    
+                    # Next SA fire time = reset time + recovery + normal RR interval  
+                    sa_node_next_fire_time = sa_node_reset_time + sa_node_reset_recovery_time + base_rr_interval_sec
+                    
+                    print(f"DEBUG: PAC at {potential_event_time:.3f} resets SA node. Next SA fire: {sa_node_next_fire_time:.3f} "
+                          f"(non-compensatory pause: {sa_node_next_fire_time - potential_event_time:.3f}s vs full RR: {base_rr_interval_sec:.3f}s)")
+                    
+                    # Remove any existing SA node events that would fire before the reset
+                    new_event_queue = [e for e in event_queue if not (e.source == "sa_node" and e.time < sa_node_next_fire_time + 0.01)] 
+                    heapq.heapify(new_event_queue); event_queue = new_event_queue
+                    
+                    if sa_node_next_fire_time < duration_sec:
+                        heapq.heappush(event_queue, BeatEvent(sa_node_next_fire_time, "sinus", "sa_node"))
 
-                    svt_rr = 60.0 / svt_rate_bpm if svt_rate_bpm > 0 else float('inf')
-                    if svt_rr != float('inf'):
-                        first_svt_beat_time = svt_actual_start_time + svt_rr 
-                        if first_svt_beat_time < duration_sec and first_svt_beat_time < svt_termination_time:
-                            heapq.heappush(event_queue, BeatEvent(first_svt_beat_time, "svt_beat", "svt_focus"))
+            # Handle SVT initiation by PAC
+            if svt_will_be_initiated:
+                is_svt_currently_active = True
+                svt_actual_start_time = potential_event_time 
+                svt_termination_time = svt_actual_start_time + svt_duration_sec
+                physio_pause = 0.1
+                resume_time  = svt_actual_start_time + svt_duration_sec + physio_pause
+                if resume_time < duration_sec:
+                    heapq.heappush(
+                      event_queue,
+                      BeatEvent(resume_time, "sinus", "sa_node")
+                    )
+                print(f"DEBUG: SVT Initiated by PAC. PAC time: {potential_event_time:.3f}, SVT Start: {svt_actual_start_time:.3f}, SVT Term Time: {svt_termination_time:.3f}")
+                print(f"DEBUG: SA P Wave Time at SVT init: {sa_node_last_actual_fire_time_for_p_wave:.3f}")
+                
+                event_queue = [e for e in event_queue if not (e.source == "sa_node" and e.time >= svt_actual_start_time and e.time < svt_termination_time)]
+                heapq.heapify(event_queue)
+
+                svt_rr = 60.0 / svt_rate_bpm if svt_rate_bpm > 0 else float('inf')
+                if svt_rr != float('inf'):
+                    first_svt_beat_time = svt_actual_start_time + svt_rr 
+                    if first_svt_beat_time < duration_sec and first_svt_beat_time < svt_termination_time:
+                        heapq.heappush(event_queue, BeatEvent(first_svt_beat_time, "svt_beat", "svt_focus"))
             
             if enable_pvc and np.random.rand() < pvc_probability_per_sinus: 
                 if not is_vt_currently_active and not is_svt_currently_active:
@@ -1205,7 +1234,12 @@ def generate_physiologically_accurate_ecg_12_lead(
                     pac_time = potential_event_time + (coupling_rr_basis * PAC_COUPLING_FACTOR)
                     if pac_time > potential_event_time + 0.100 and \
                        (sa_node_next_fire_time == float('inf') or pac_time < sa_node_next_fire_time - 0.100): 
-                        heapq.heappush(event_queue, BeatEvent(pac_time, "pac", "pac_focus"))
+                        # Randomly select PAC type based on clinical prevalence
+                        pac_types = ["pac_high_ra", "pac_low_atrial", "pac_left_atrial"]
+                        pac_weights = [0.4, 0.3, 0.3]  # High RA most common, then low atrial, then left atrial
+                        selected_pac_type = np.random.choice(pac_types, p=pac_weights)
+                        print(f"DEBUG: Generated {selected_pac_type} at {pac_time:.3f}s (coupling factor: {PAC_COUPLING_FACTOR})")
+                        heapq.heappush(event_queue, BeatEvent(pac_time, selected_pac_type, "pac_focus"))
             if enable_pvc and np.random.rand() < pvc_probability_per_sinus:
                 if not is_vt_currently_active and not is_svt_currently_active:
                     pvc_time = potential_event_time + (coupling_rr_basis * PVC_COUPLING_FACTOR)
@@ -1214,30 +1248,62 @@ def generate_physiologically_accurate_ecg_12_lead(
                     if pvc_time > ventricle_ready_for_next_qrs_at_time and \
                        (next_potential_sa_qrs == float('inf') or pvc_time < next_potential_sa_qrs - 0.100):
                         heapq.heappush(event_queue, BeatEvent(pvc_time, "pvc", "pvc_focus"))
-        elif current_event.beat_type == "pac":
-            sa_node_next_fire_time = potential_event_time + base_rr_interval_sec
-            new_event_queue_pac_reset = [e for e in event_queue if not (e.source == "sa_node" and e.time >= potential_event_time)]
-            heapq.heapify(new_event_queue_pac_reset); event_queue = new_event_queue_pac_reset
-            if base_rr_interval_sec != float('inf') and sa_node_next_fire_time < duration_sec:
-                 if not is_svt_currently_active and not is_vt_currently_active: 
-                    heapq.heappush(event_queue, BeatEvent(sa_node_next_fire_time, "sinus", "sa_node"))
+        elif current_event.beat_type.startswith("pac"):
+            # Check if PAC will initiate SVT first (before SA node reset)
+            svt_will_be_initiated = False
             if is_dynamic_svt_episode_configured and not is_svt_currently_active and not is_vt_currently_active and \
                not is_afib_active_base and not is_aflutter_active_base and not is_third_degree_block_active_base:
                 if np.random.rand() < svt_initiation_probability_after_pac:
-                    is_svt_currently_active = True
-                    svt_actual_start_time = potential_event_time
-                    svt_termination_time = svt_actual_start_time + svt_duration_sec
-                    event_queue = [e for e in event_queue if not (e.source == "sa_node" and e.time >= svt_actual_start_time and (svt_termination_time is None or e.time < svt_termination_time))]
-                    heapq.heapify(event_queue)
-                    svt_rr = 60.0 / svt_rate_bpm if svt_rate_bpm > 0 else float('inf')
-                    if svt_rr != float('inf'):
-                        first_svt_beat_time = svt_actual_start_time + svt_rr 
-                        if first_svt_beat_time < duration_sec and (svt_termination_time is None or first_svt_beat_time < svt_termination_time):
-                            heapq.heappush(event_queue, BeatEvent(first_svt_beat_time, "svt_beat", "svt_focus"))
-                    physio_pause_after_svt = 0.1
-                    resume_sinus_time_svt = svt_actual_start_time + svt_duration_sec + physio_pause_after_svt
-                    if resume_sinus_time_svt < duration_sec:
-                        heapq.heappush(event_queue, BeatEvent(resume_sinus_time_svt, "sinus", "sa_node_resume_post_svt"))
+                    svt_will_be_initiated = True
+            
+            # PAC resets SA node cycle via retrograde conduction - creates NON-compensatory pause
+            # UNLESS the PAC initiates SVT, in which case SVT takes over
+            if not is_svt_currently_active and not is_vt_currently_active and not svt_will_be_initiated:
+                if base_rr_interval_sec > 0 and base_rr_interval_sec != float('inf'):
+                    # PAC resets SA node at PAC time, then SA fires after normal RR interval
+                    # BUT: slight delay due to retrograde conduction time and SA node recovery
+                    retrograde_conduction_delay = 0.05  # ~50ms for retrograde conduction to SA node
+                    sa_node_reset_recovery_time = 0.03   # ~30ms for SA node to recover after reset
+                    
+                    # SA node reset time = PAC time + retrograde delay
+                    sa_node_reset_time = potential_event_time + retrograde_conduction_delay
+                    
+                    # Next SA fire time = reset time + recovery + normal RR interval  
+                    sa_node_next_fire_time = sa_node_reset_time + sa_node_reset_recovery_time + base_rr_interval_sec
+                    
+                    print(f"DEBUG: PAC at {potential_event_time:.3f} resets SA node. Next SA fire: {sa_node_next_fire_time:.3f} "
+                          f"(non-compensatory pause: {sa_node_next_fire_time - potential_event_time:.3f}s vs full RR: {base_rr_interval_sec:.3f}s)")
+                    
+                    # Remove any existing SA node events that would fire before the reset
+                    new_event_queue_pac_reset = [e for e in event_queue if not (e.source == "sa_node" and e.time < sa_node_next_fire_time + 0.01)]
+                    heapq.heapify(new_event_queue_pac_reset); event_queue = new_event_queue_pac_reset
+                    
+                    if sa_node_next_fire_time < duration_sec:
+                        heapq.heappush(event_queue, BeatEvent(sa_node_next_fire_time, "sinus", "sa_node"))
+            
+            # Handle SVT initiation by PAC  
+            if svt_will_be_initiated:
+                is_svt_currently_active = True
+                svt_actual_start_time = potential_event_time
+                svt_termination_time = svt_actual_start_time + svt_duration_sec
+                physio_pause = 0.1
+                resume_time  = svt_actual_start_time + svt_duration_sec + physio_pause
+                if resume_time < duration_sec:
+                    heapq.heappush(
+                      event_queue,
+                      BeatEvent(resume_time, "sinus", "sa_node")
+                    )
+                print(f"DEBUG: SVT Initiated by PAC. PAC time: {potential_event_time:.3f}, SVT Start: {svt_actual_start_time:.3f}, SVT Term Time: {svt_termination_time:.3f}")
+                print(f"DEBUG: SA P Wave Time at SVT init: {sa_node_last_actual_fire_time_for_p_wave:.3f}")
+                
+                event_queue = [e for e in event_queue if not (e.source == "sa_node" and e.time >= svt_actual_start_time and e.time < svt_termination_time)]
+                heapq.heapify(event_queue)
+                
+                svt_rr = 60.0 / svt_rate_bpm if svt_rate_bpm > 0 else float('inf')
+                if svt_rr != float('inf'):
+                    first_svt_beat_time = svt_actual_start_time + svt_rr 
+                    if first_svt_beat_time < duration_sec and first_svt_beat_time < svt_termination_time:
+                        heapq.heappush(event_queue, BeatEvent(first_svt_beat_time, "svt_beat", "svt_focus"))
             if enable_pvc and np.random.rand() < pvc_probability_per_sinus: 
                 if not is_vt_currently_active and not is_svt_currently_active:
                     coupling_rr_basis = actual_rr_to_this_beat if actual_rr_to_this_beat > 0.1 else base_rr_interval_sec
