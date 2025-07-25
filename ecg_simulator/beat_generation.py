@@ -2,7 +2,7 @@
 import numpy as np
 from typing import Dict, Tuple, Optional
 from .constants import FS, BASELINE_MV, BEAT_3D_DIRECTIONS
-from .waveform_primitives import gaussian_wave, fourier_p_wave
+from .waveform_primitives import gaussian_wave, fourier_p_wave, fourier_qrs_component
 
 def generate_biphasic_p_wave_vectors(
     t_axis: np.ndarray,
@@ -100,6 +100,120 @@ def generate_biphasic_p_wave_vectors(
             cardiac_vectors[:, i] = smoothed_component
     
     return cardiac_vectors
+
+def generate_physiological_qrs_vectors(
+    t_axis: np.ndarray,
+    qrs_onset_time: float,
+    qrs_duration: float,
+    qrs_amplitudes: Dict[str, float]
+) -> np.ndarray:
+    """
+    Generate physiologically accurate QRS vectors based on real cardiac electrophysiology.
+    
+    This creates QRS vectors that are properly placed in the time axis at the correct QRS location.
+    
+    Args:
+        t_axis: Time axis for the beat
+        qrs_onset_time: Time when QRS complex begins
+        qrs_duration: Total QRS complex duration
+        qrs_amplitudes: Dictionary with Q, R, S amplitudes (used for scaling)
+    
+    Returns:
+        cardiac_vectors: Array of shape (len(t_axis), 3) with QRS vectors at correct times
+    """
+    cardiac_vectors = np.zeros((len(t_axis), 3))
+    
+    # Define the QRS time window
+    qrs_end_time = qrs_onset_time + qrs_duration
+    qrs_mask = (t_axis >= qrs_onset_time) & (t_axis <= qrs_end_time)
+    
+    if not np.any(qrs_mask):
+        print(f"DEBUG: No QRS mask found! qrs_onset={qrs_onset_time:.3f}, duration={qrs_duration:.3f}")
+        print(f"DEBUG: t_axis range: {t_axis[0]:.3f} to {t_axis[-1]:.3f}")
+        return cardiac_vectors
+    
+    # Get indices and time points within QRS
+    qrs_indices = np.where(qrs_mask)[0]
+    qrs_time_points = t_axis[qrs_mask]
+    qrs_progress = (qrs_time_points - qrs_onset_time) / qrs_duration  # 0 to 1
+    
+    print(f"DEBUG: QRS region found - indices {qrs_indices[0]} to {qrs_indices[-1]} ({len(qrs_indices)} samples)")
+    print(f"DEBUG: QRS time range: {qrs_time_points[0]:.3f} to {qrs_time_points[-1]:.3f}s")
+    
+    # Calculate instantaneous cardiac vector for each QRS time point
+    for i, (idx, progress) in enumerate(zip(qrs_indices, qrs_progress)):
+        vector_direction, vector_magnitude = calculate_instantaneous_qrs_vector(progress, qrs_amplitudes)
+        cardiac_vectors[idx] = vector_direction * vector_magnitude
+        
+        # Debug first few and peak vectors
+        if i < 3 or vector_magnitude > 1.0:
+            print(f"DEBUG: QRS[{idx}] t={progress:.2f}: |V|={vector_magnitude:.3f}, direction=[{vector_direction[0]:.2f},{vector_direction[1]:.2f},{vector_direction[2]:.2f}]")
+    
+    return cardiac_vectors
+
+
+def calculate_instantaneous_qrs_vector(progress: float, qrs_amplitudes: Dict[str, float]) -> tuple:
+    """
+    Calculate the instantaneous cardiac vector direction and magnitude during QRS.
+    
+    Based on physiological ventricular depolarization sequence with proper amplitude scaling.
+    
+    Args:
+        progress: QRS progress from 0.0 (onset) to 1.0 (end)
+        qrs_amplitudes: Amplitude scaling factors
+        
+    Returns:
+        (vector_direction, magnitude): 3D direction vector and scalar magnitude
+    """
+    # Clamp progress to valid range
+    progress = max(0.0, min(1.0, progress))
+    
+    # Calculate overlapping phase contributions with proper scaling
+    septal_contrib = 0.0
+    free_wall_contrib = 0.0
+    basal_contrib = 0.0
+    
+    # Septal contribution (0-35% of QRS, peaks at 15%)
+    if progress <= 0.35:
+        septal_envelope = np.exp(-((progress - 0.15) / 0.10) ** 2)  
+        septal_contrib = abs(qrs_amplitudes.get('q_amplitude', -0.08)) * septal_envelope
+    
+    # Free wall contribution (10-70% of QRS, peaks at 40%)
+    if 0.10 <= progress <= 0.70:
+        free_wall_envelope = np.exp(-((progress - 0.40) / 0.18) ** 2)  
+        free_wall_contrib = abs(qrs_amplitudes.get('r_amplitude', 1.4)) * free_wall_envelope
+    
+    # Basal contribution (65-100% of QRS, peaks at 85%)
+    if progress >= 0.65:
+        basal_envelope = np.exp(-((progress - 0.85) / 0.12) ** 2)  
+        basal_contrib = abs(qrs_amplitudes.get('s_amplitude', -0.25)) * basal_envelope
+    
+    # Phase-dependent vector directions  
+    septal_direction = np.array([-0.7, 0.1, 0.3])    # Rightward, anterior (Q in lateral, r in V1)
+    free_wall_direction = np.array([0.6, 0.7, 0.4])  # Left, inferior, anterior (dominant R)
+    basal_direction = np.array([0.1, 0.1, -1.0])     # Strongly posterior (negative Z for deep S in V1)
+    
+    # Normalize directions
+    septal_direction = septal_direction / np.linalg.norm(septal_direction)
+    free_wall_direction = free_wall_direction / np.linalg.norm(free_wall_direction)
+    basal_direction = basal_direction / np.linalg.norm(basal_direction)
+    
+    # Calculate weighted vector sum
+    total_vector = (septal_contrib * septal_direction + 
+                   free_wall_contrib * free_wall_direction + 
+                   basal_contrib * basal_direction)
+    
+    # Get magnitude and normalize direction
+    magnitude = np.linalg.norm(total_vector)
+    if magnitude > 1e-6:
+        direction = total_vector / magnitude
+    else:
+        direction = np.array([1.0, 0.0, 0.0])  # Default leftward
+        magnitude = 0.0
+    
+    print(f"DEBUG: QRS t={progress:.2f}, septal={septal_contrib:.3f}, free_wall={free_wall_contrib:.3f}, basal={basal_contrib:.3f}, |V|={magnitude:.3f}")
+    
+    return direction, magnitude
 
 def generate_single_beat_morphology(params: Dict[str, float], fs: int = FS, draw_only_p: bool = False, is_flutter_wave_itself: bool = False):
     if is_flutter_wave_itself:
@@ -284,22 +398,47 @@ def generate_single_beat_3d_vectors(
         
         # Generate QRS complex vectors
         if qrs_duration > 0:
-            qrs_scalar_waveform = np.zeros_like(t_relative_to_p_onset)
+            # Check if this beat type supports multi-phase QRS
+            has_multi_phase_qrs = ("QRS_SEPTAL" in beat_directions and 
+                                 "QRS_FREE_WALL" in beat_directions and 
+                                 "QRS_BASAL" in beat_directions)
             
-            if params.get('q_amplitude', 0) != 0:
-                q_center = qrs_onset_in_array_time + qrs_duration * 0.15
-                q_width_std_dev = qrs_duration / 10 if qrs_duration > 0 else 1e-3
-                qrs_scalar_waveform += gaussian_wave(t_relative_to_p_onset, q_center, params['q_amplitude'], q_width_std_dev)
-            if params.get('r_amplitude', 0) != 0:
-                r_center = qrs_onset_in_array_time + qrs_duration * 0.4
-                r_width_std_dev = qrs_duration / 6 if qrs_duration > 0 else 1e-3
-                qrs_scalar_waveform += gaussian_wave(t_relative_to_p_onset, r_center, params['r_amplitude'], r_width_std_dev)
-            if params.get('s_amplitude', 0) != 0:
-                s_center = qrs_onset_in_array_time + qrs_duration * 0.75
-                s_width_std_dev = qrs_duration / 10 if qrs_duration > 0 else 1e-3
-                qrs_scalar_waveform += gaussian_wave(t_relative_to_p_onset, s_center, params['s_amplitude'], s_width_std_dev)
-            
-            cardiac_vectors += np.outer(qrs_scalar_waveform, qrs_direction)
+            if has_multi_phase_qrs:
+                # Use physiological QRS generation based on real cardiac electrophysiology
+                qrs_amplitudes = {
+                    'q_amplitude': params.get('q_amplitude', 0),
+                    'r_amplitude': params.get('r_amplitude', 0),
+                    's_amplitude': params.get('s_amplitude', 0)
+                }
+                
+                qrs_vectors = generate_physiological_qrs_vectors(
+                    t_relative_to_p_onset,
+                    qrs_onset_in_array_time,
+                    qrs_duration,
+                    qrs_amplitudes
+                )
+                cardiac_vectors += qrs_vectors
+                print(f"DEBUG: Using physiological QRS for {beat_type}")
+                
+            else:
+                # Fallback to legacy single-vector QRS generation
+                qrs_scalar_waveform = np.zeros_like(t_relative_to_p_onset)
+                
+                if params.get('q_amplitude', 0) != 0:
+                    q_center = qrs_onset_in_array_time + qrs_duration * 0.15
+                    q_width_std_dev = qrs_duration / 10 if qrs_duration > 0 else 1e-3
+                    qrs_scalar_waveform += gaussian_wave(t_relative_to_p_onset, q_center, params['q_amplitude'], q_width_std_dev)
+                if params.get('r_amplitude', 0) != 0:
+                    r_center = qrs_onset_in_array_time + qrs_duration * 0.4
+                    r_width_std_dev = qrs_duration / 6 if qrs_duration > 0 else 1e-3
+                    qrs_scalar_waveform += gaussian_wave(t_relative_to_p_onset, r_center, params['r_amplitude'], r_width_std_dev)
+                if params.get('s_amplitude', 0) != 0:
+                    s_center = qrs_onset_in_array_time + qrs_duration * 0.75
+                    s_width_std_dev = qrs_duration / 10 if qrs_duration > 0 else 1e-3
+                    qrs_scalar_waveform += gaussian_wave(t_relative_to_p_onset, s_center, params['s_amplitude'], s_width_std_dev)
+                
+                cardiac_vectors += np.outer(qrs_scalar_waveform, qrs_direction)
+                print(f"DEBUG: Using legacy single-vector QRS for {beat_type}")
 
         # Generate T wave vectors
         t_onset_in_array_time = qrs_onset_in_array_time + qrs_duration + st_duration

@@ -91,6 +91,105 @@ def fourier_p_wave(t_points, center, amplitude, duration):
     
     return p_wave
 
+def fourier_qrs_component(t_points, center, amplitude, duration, component_type="septal"):
+    """
+    Generate physiologically accurate QRS component using Fourier approach.
+    
+    Creates smooth, realistic QRS morphology for each phase of ventricular depolarization.
+    Different component types have distinct frequency characteristics and morphologies.
+    
+    Args:
+        t_points: Time points array
+        center: Center time of QRS component
+        amplitude: Peak amplitude (can be positive or negative)
+        duration: Component duration
+        component_type: "septal", "free_wall", or "basal" for different morphologies
+    
+    Returns:
+        QRS component signal with smooth, physiological morphology
+    """
+    if duration <= 1e-9:
+        return np.zeros_like(t_points)
+    
+    # Create time relative to QRS component center, normalized by duration
+    t_relative = (t_points - center) / duration
+    
+    # Define the QRS component window - much wider for seamless blending
+    mask = np.abs(t_relative) <= 0.8  # Very wide window for maximum smoothness
+    qrs_component = np.zeros_like(t_points)
+    
+    if not np.any(mask):
+        return qrs_component
+    
+    t_masked = t_relative[mask]
+    
+    # Component-specific frequency characteristics
+    if component_type == "septal":
+        # Septal depolarization: Sharp, brief, higher frequency
+        base_freq = 2.5  # Higher frequency for sharp septal Q waves
+        main_component = np.sin(2 * np.pi * base_freq * t_masked + np.pi/2)
+        # Add sharpness with 3rd harmonic
+        harmonic_3 = 0.3 * np.sin(2 * np.pi * 3 * base_freq * t_masked + np.pi/4)
+        base_waveform = main_component + harmonic_3
+        
+    elif component_type == "free_wall":
+        # Free wall depolarization: Dominant, smooth, broad R wave
+        base_freq = 1.5  # Lower frequency for broader R waves
+        main_component = np.sin(2 * np.pi * base_freq * t_masked + np.pi/2)
+        # Add smooth roundness with 2nd harmonic
+        harmonic_2 = 0.15 * np.sin(2 * np.pi * 2 * base_freq * t_masked + np.pi/3)
+        base_waveform = main_component + harmonic_2
+        
+    elif component_type == "basal":
+        # Basal depolarization: Terminal, sharp S waves
+        base_freq = 2.2  # Medium-high frequency for terminal deflections
+        main_component = np.sin(2 * np.pi * base_freq * t_masked + np.pi/2)
+        # Add terminal sharpness
+        harmonic_3 = 0.25 * np.sin(2 * np.pi * 3 * base_freq * t_masked - np.pi/6)
+        base_waveform = main_component + harmonic_3
+        
+    else:
+        # Default: smooth general QRS morphology
+        base_freq = 1.8
+        main_component = np.sin(2 * np.pi * base_freq * t_masked + np.pi/2)
+        base_waveform = main_component
+    
+    # Apply very smooth envelope (extended Hann window)
+    envelope = 0.5 * (1 + np.cos(np.pi * t_masked / 0.8))
+    # Apply additional Gaussian-like smoothing for ultra-smooth edges
+    envelope = envelope * np.exp(-0.5 * (t_masked / 0.6) ** 2)
+    
+    # Create final QRS component signal
+    qrs_signal = envelope * base_waveform
+    
+    # Ensure appropriate polarity based on amplitude sign
+    if amplitude < 0:
+        qrs_signal = -np.abs(qrs_signal)  # Negative deflection (Q, S waves)
+    else:
+        qrs_signal = np.abs(qrs_signal)   # Positive deflection (R waves)
+    
+    # Apply additional smoothing for seamless phase transitions
+    if len(qrs_signal) > 4:
+        smoothed_signal = np.copy(qrs_signal)
+        for i in range(2, len(qrs_signal) - 2):
+            smoothed_signal[i] = (0.1 * qrs_signal[i-2] + 
+                                0.2 * qrs_signal[i-1] + 
+                                0.4 * qrs_signal[i] + 
+                                0.2 * qrs_signal[i+1] + 
+                                0.1 * qrs_signal[i+2])
+        qrs_signal = smoothed_signal
+    
+    # Normalize to ensure peak amplitude matches target
+    signal_peak = np.max(np.abs(qrs_signal))
+    if signal_peak > 0:
+        normalization_factor = abs(amplitude) / signal_peak
+        qrs_signal *= normalization_factor
+    
+    # Apply final amplitude (preserve sign)
+    qrs_component[mask] = qrs_signal if amplitude >= 0 else -qrs_signal
+    
+    return qrs_component
+
 # --- Fibrillatory Wave Generation for AFib ---
 def generate_fibrillatory_waves(duration_sec: float, amplitude_mv: float, fs: int = FS):
     num_samples = int(duration_sec * fs)

@@ -78,7 +78,7 @@ def get_rate_corrected_intervals(heart_rate_bpm: float, base_params: dict, targe
 SINUS_PARAMS = {
     "p_duration": 0.09, "pr_interval": 0.16, "qrs_duration": 0.10,
     "st_duration": 0.12, "t_duration": 0.16, "p_amplitude": 0.25,
-    "q_amplitude": -0.2, "r_amplitude": 1.4, "s_amplitude": -0.35,
+    "q_amplitude": -0.08, "r_amplitude": 1.4, "s_amplitude": -0.6,   # Physiological amplitudes for proper V1 rS pattern
     "t_amplitude": 0.25,
 }
 PVC_PARAMS = { # Also used as a base for VT beats
@@ -273,6 +273,14 @@ def calculate_qrs_vector_from_axis(target_axis_degrees: float) -> np.ndarray:
 # For Sinus Rhythm - Dual-Phase P-wave Implementation
 SINUS_P_WAVE_PHASE1_DIRECTION = np.array([-0.3, 0.5, 0.8])  # Right atrial depolarization: rightward, anterior
 SINUS_P_WAVE_PHASE2_DIRECTION = np.array([0.6, 0.7, 0.2])   # Left atrial depolarization: leftward, posterior
+
+# Multi-Phase QRS Implementation - Physiologically Accurate Sequential Depolarization
+# Corrected vectors for proper V1 rS pattern and lateral Q waves
+SINUS_QRS_SEPTAL_DIRECTION = np.array([1.0, 0.0, 0.2])      # Strong leftward septal: creates Q in lateral, r in V1
+SINUS_QRS_FREE_WALL_DIRECTION = np.array([0.6, 0.8, 0.4])   # LV free wall: leftward/inferior, dominant R waves
+SINUS_QRS_BASAL_DIRECTION = np.array([-0.6, 0.2, -0.4])     # Strong rightward/posterior: creates deep S waves in V1
+
+# Legacy single QRS direction (for backward compatibility)
 SINUS_QRS_COMPLEX_DIRECTION = np.array([0.7, 0.6, 0.35]) # Enhanced: Further increased anterior component for realistic precordial progression
 SINUS_T_WAVE_DIRECTION = np.array([0.3, 0.6, 0.15]) # Example: Generally follows QRS
 
@@ -303,6 +311,13 @@ def _normalize(v):
 
 SINUS_P_WAVE_PHASE1_DIRECTION = _normalize(SINUS_P_WAVE_PHASE1_DIRECTION)
 SINUS_P_WAVE_PHASE2_DIRECTION = _normalize(SINUS_P_WAVE_PHASE2_DIRECTION)
+
+# Normalize multi-phase QRS vectors
+SINUS_QRS_SEPTAL_DIRECTION = _normalize(SINUS_QRS_SEPTAL_DIRECTION)
+SINUS_QRS_FREE_WALL_DIRECTION = _normalize(SINUS_QRS_FREE_WALL_DIRECTION)
+SINUS_QRS_BASAL_DIRECTION = _normalize(SINUS_QRS_BASAL_DIRECTION)
+
+# Legacy single QRS direction (normalized)
 SINUS_QRS_COMPLEX_DIRECTION = _normalize(SINUS_QRS_COMPLEX_DIRECTION)
 SINUS_T_WAVE_DIRECTION = _normalize(SINUS_T_WAVE_DIRECTION)
 PVC_QRS_COMPLEX_DIRECTION = _normalize(PVC_QRS_COMPLEX_DIRECTION)
@@ -322,7 +337,10 @@ BEAT_3D_DIRECTIONS = {
     "sinus": {
         "P_PHASE1": SINUS_P_WAVE_PHASE1_DIRECTION,  # Right atrial depolarization
         "P_PHASE2": SINUS_P_WAVE_PHASE2_DIRECTION,  # Left atrial depolarization  
-        "QRS": SINUS_QRS_COMPLEX_DIRECTION,
+        "QRS_SEPTAL": SINUS_QRS_SEPTAL_DIRECTION,    # Septal depolarization (0-20ms)
+        "QRS_FREE_WALL": SINUS_QRS_FREE_WALL_DIRECTION,  # Free wall depolarization (20-60ms)
+        "QRS_BASAL": SINUS_QRS_BASAL_DIRECTION,      # Basal depolarization (60-100ms)
+        "QRS": SINUS_QRS_COMPLEX_DIRECTION,          # Legacy single QRS direction
         "T": SINUS_T_WAVE_DIRECTION,
     },
     # PACs - Different types based on ectopic focus location
