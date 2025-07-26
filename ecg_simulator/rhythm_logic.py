@@ -647,7 +647,7 @@ def generate_physiologically_accurate_ecg(
         vt_actual_end_time = duration_sec # VT ran till end
 
 
-    noise_amplitude = 0.02
+    noise_amplitude = 0.005  # Reduced for cleaner Q wave visibility
     full_ecg_signal_np += noise_amplitude * np.random.normal(0, 1, len(full_ecg_signal_np))
     
     description_parts = []
@@ -1353,7 +1353,7 @@ def generate_physiologically_accurate_ecg_12_lead(
         vt_actual_end_time = duration_sec
 
     # Add baseline noise to 3D vectors
-    noise_amplitude = 0.02 # mV
+    noise_amplitude = 0.009  # Reduced for cleaner Q wave visibility (mV)
     noise_3d = noise_amplitude * np.random.normal(0, 1, full_cardiac_vectors.shape)
     full_cardiac_vectors += noise_3d
     

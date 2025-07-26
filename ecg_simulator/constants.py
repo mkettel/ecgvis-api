@@ -78,7 +78,7 @@ def get_rate_corrected_intervals(heart_rate_bpm: float, base_params: dict, targe
 SINUS_PARAMS = {
     "p_duration": 0.09, "pr_interval": 0.16, "qrs_duration": 0.10,
     "st_duration": 0.12, "t_duration": 0.16, "p_amplitude": 0.25,
-    "q_amplitude": -0.08, "r_amplitude": 1.4, "s_amplitude": -0.6,   # Physiological amplitudes for proper V1 rS pattern
+    "q_amplitude": -0.15, "r_amplitude": 1.4, "s_amplitude": -0.6,   # Enhanced Q wave visibility for proper septal depolarization
     "t_amplitude": 0.25,
 }
 PVC_PARAMS = { # Also used as a base for VT beats
@@ -276,7 +276,7 @@ SINUS_P_WAVE_PHASE2_DIRECTION = np.array([0.6, 0.7, 0.2])   # Left atrial depola
 
 # Multi-Phase QRS Implementation - Physiologically Accurate Sequential Depolarization
 # Corrected vectors for proper V1 rS pattern and lateral Q waves
-SINUS_QRS_SEPTAL_DIRECTION = np.array([1.0, 0.0, 0.2])      # Strong leftward septal: creates Q in lateral, r in V1
+SINUS_QRS_SEPTAL_DIRECTION = np.array([-1.0, 0.0, 0.2])     # Rightward septal (L→R): creates Q in lateral, r in V1
 SINUS_QRS_FREE_WALL_DIRECTION = np.array([0.6, 0.8, 0.4])   # LV free wall: leftward/inferior, dominant R waves
 SINUS_QRS_BASAL_DIRECTION = np.array([-0.6, 0.2, -0.4])     # Strong rightward/posterior: creates deep S waves in V1
 
